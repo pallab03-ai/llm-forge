@@ -1,0 +1,69 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+build/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Docker
+docker-compose.override.yml
+
+# Logs
+*.log
+logs/
+
+# ML / data
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.onnx
+*.gguf
+checkpoints/
+adapters/
+datasets/raw/
+mlruns/
+
+# Runtime storage (user uploads, model artifacts, datasets)
+local_storage/
+backend/local_storage/
+storage/
+
+# Local scratch / placeholders
+kimi_memory/
+*.tmp
+*.bak
+Thumbs.db
+ehthumbs.db
+Desktop.ini
