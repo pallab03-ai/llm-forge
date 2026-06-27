@@ -5,6 +5,8 @@ create deployment → validate ModelVersion → activate → load adapter → AC
 
 from __future__ import annotations
 
+import time
+from datetime import datetime, timezone
 from uuid import UUID
 
 from app.models.deployment import Deployment, DeploymentStatus
@@ -21,6 +23,11 @@ from app.schemas.deployment import (
     GenerateResponse,
 )
 from app.services.inference_service import InferenceError, InferenceService
+from app.services.monitoring_service import (
+    MonitoringService,
+    RequestLogInput,
+    RequestStatus,
+)
 
 
 class DeploymentError(Exception):
@@ -112,11 +119,17 @@ class DeploymentService:
         model_repo: ModelRepository,
         training_job_repo: TrainingJobRepository,
         inference_service: InferenceService,
+        monitoring_service: MonitoringService | None = None,
     ) -> None:
         self._deployments = deployment_repo
         self._models = model_repo
         self._jobs = training_job_repo
         self._inference = inference_service
+        # Optional. When provided, the service logs every /generate
+        # call's metadata (lengths, latency, status) to the monitoring
+        # tables. Pre-existing tests construct the service with 4 args
+        # and the default is None, so they keep working.
+        self._monitoring = monitoring_service
 
     async def create_deployment(
         self,
@@ -253,12 +266,63 @@ class DeploymentService:
         # was cleared. Activation normally loads it once.
         self._inference.load(artifact_path, base_model)
 
+        start = time.monotonic()
         try:
             response = self._inference.generate(request.prompt)
         except InferenceError as exc:
+            latency_ms = int((time.monotonic() - start) * 1000)
+            await self._log_request(
+                deployment_id=deployment_id,
+                latency_ms=latency_ms,
+                status=RequestStatus.FAILURE,
+                prompt_length=len(request.prompt),
+                response_length=None,
+                error_type=exc.code,
+                error_message=str(exc),
+                error_status_code=exc.http_status,
+            )
             raise DeploymentError(f"Inference failed: {exc}") from exc
 
+        latency_ms = int((time.monotonic() - start) * 1000)
+        await self._log_request(
+            deployment_id=deployment_id,
+            latency_ms=latency_ms,
+            status=RequestStatus.SUCCESS,
+            prompt_length=len(request.prompt),
+            response_length=len(response),
+            error_type=None,
+            error_message=None,
+            error_status_code=None,
+        )
         return GenerateResponse(response=response)
+
+    async def _log_request(
+        self,
+        *,
+        deployment_id: UUID,
+        latency_ms: int,
+        status: RequestStatus,
+        prompt_length: int,
+        response_length: int | None,
+        error_type: str | None,
+        error_message: str | None,
+        error_status_code: int | None,
+    ) -> None:
+        if self._monitoring is None:
+            return
+        await self._monitoring.log_request(
+            RequestLogInput(
+                deployment_id=deployment_id,
+                timestamp=datetime.now(timezone.utc),
+                latency_ms=latency_ms,
+                status=status,
+                prompt_length=prompt_length,
+                response_length=response_length,
+                error_type=error_type,
+                error_message=error_message,
+                error_status_code=error_status_code,
+            )
+        )
 
     async def _ensure_deployment_access(
         self, deployment_id: UUID, user_id: UUID

@@ -70,6 +70,11 @@ from app.services.deployment_service import (
     DeploymentNotFoundError,
 )
 from app.services.inference_service import InferenceError
+from app.services.monitoring_service import (
+    MonitoringDeploymentAccessDeniedError,
+    MonitoringDeploymentNotFoundError,
+    MonitoringError,
+)
 
 
 @asynccontextmanager
@@ -584,6 +589,36 @@ def create_app() -> FastAPI:
     @app.exception_handler(DeploymentError)
     async def _deployment_error_handler(
         _: Request, exc: DeploymentError
+    ) -> JSONResponse:
+        return _envelope_error(
+            code=exc.code,
+            message=str(exc),
+            http_status=exc.http_status,
+        )
+
+    @app.exception_handler(MonitoringDeploymentNotFoundError)
+    async def _monitoring_deployment_not_found_handler(
+        _: Request, exc: MonitoringDeploymentNotFoundError
+    ) -> JSONResponse:
+        return _envelope_error(
+            code=exc.code,
+            message=str(exc),
+            http_status=exc.http_status,
+        )
+
+    @app.exception_handler(MonitoringDeploymentAccessDeniedError)
+    async def _monitoring_deployment_access_denied_handler(
+        _: Request, exc: MonitoringDeploymentAccessDeniedError
+    ) -> JSONResponse:
+        return _envelope_error(
+            code=exc.code,
+            message="You do not have access to this deployment.",
+            http_status=exc.http_status,
+        )
+
+    @app.exception_handler(MonitoringError)
+    async def _monitoring_error_handler(
+        _: Request, exc: MonitoringError
     ) -> JSONResponse:
         return _envelope_error(
             code=exc.code,

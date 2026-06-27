@@ -9,6 +9,12 @@ from app.models.dataset import Dataset, DatasetVersion  # noqa: F401
 from app.models.deployment import Deployment  # noqa: F401
 from app.models.evaluation import Evaluation  # noqa: F401
 from app.models.model import Model, ModelVersion  # noqa: F401
+from app.models.monitoring import (  # noqa: F401
+    DeploymentHealth,
+    DeploymentHealthState,
+    DeploymentRequestLog,
+    RequestStatus,
+)
 from app.models.training_job import TrainingJob  # noqa: F401
 from app.models.user import User  # noqa: F401
 
@@ -16,9 +22,13 @@ __all__ = [
     "Dataset",
     "DatasetVersion",
     "Deployment",
+    "DeploymentHealth",
+    "DeploymentHealthState",
+    "DeploymentRequestLog",
     "Evaluation",
     "Model",
     "ModelVersion",
+    "RequestStatus",
     "TrainingJob",
     "User",
 ]
