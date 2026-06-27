@@ -1,33 +1,16 @@
-"""Model registry for supported QLoRA fine-tuning models.
+"""Supported-model registry for QLoRA fine-tuning.
 
-Each entry defines the HuggingFace model ID, hardware requirements,
-LoRA target modules, and chat template configuration needed for
-QLoRA training.
+Each entry defines the HuggingFace model ID, hardware budget, LoRA
+target modules, and chat template.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 
 @dataclass(frozen=True)
 class ModelConfig:
-    """Immutable configuration for a supported model.
-
-    Attributes:
-        display_name: Human-readable model name.
-        hf_model_id: HuggingFace model identifier (e.g. "google/gemma-3-1b-it").
-        parameter_count: Number of parameters in billions (e.g. 1.0).
-        quantized_vram_gb: Estimated VRAM in GB for 4-bit quantized inference + training.
-        max_seq_length: Maximum sequence length the model supports.
-        lora_target_modules: List of module names to attach LoRA adapters to.
-        attn_implementation: Attention implementation ("eager", "sdpa", "flash_attention_2").
-        torch_dtype: Torch dtype string for model loading (e.g. "float16").
-        chat_template: Jinja-style chat template for formatting conversations.
-        special_tokens: Dict of special token overrides (e.g. pad_token).
-    """
-
     display_name: str
     hf_model_id: str
     parameter_count: float
@@ -42,11 +25,7 @@ class ModelConfig:
     recommended_seq_length: int = 2048
 
 
-# ---------------------------------------------------------------------------
-# Supported model registry
-# ---------------------------------------------------------------------------
-# Key = the `base_model` string that the API accepts (matches hf_model_id).
-
+# Key = the base_model string the API accepts (matches hf_model_id).
 SUPPORTED_MODELS: dict[str, ModelConfig] = {
     "google/gemma-3-1b-it": ModelConfig(
         display_name="Gemma 3 1B IT",
@@ -72,17 +51,6 @@ SUPPORTED_MODELS: dict[str, ModelConfig] = {
 
 
 def get_model_config(model_id: str) -> ModelConfig:
-    """Look up a model config by its HuggingFace model ID.
-
-    Args:
-        model_id: The model identifier string (e.g. "google/gemma-3-1b-it").
-
-    Returns:
-        The ModelConfig for the requested model.
-
-    Raises:
-        ValueError: If the model_id is not in the SUPPORTED_MODELS registry.
-    """
     if model_id not in SUPPORTED_MODELS:
         supported = ", ".join(sorted(SUPPORTED_MODELS.keys()))
         raise ValueError(

@@ -1,26 +1,21 @@
-"""Tests for Phase 4.2/4.3 — QLoRA Training Engine.
+﻿"""Tests for Phase 4.2/4.3 — QLoRA Training Engine.
 
 All tests mock torch/transformers/peft/trl/bitsandbytes imports
 so they can run without a GPU or ML dependencies installed.
 
 Covers:
-- ModelConfig / SUPPORTED_MODELS registry (10 tests)
-- DatasetNormalizer (28 tests)
-- DatasetLoader (15 tests)
-- AlpacaFormatter (8 tests)
-- QLoRAConfigFactory (6 tests)
-- PEFTConfigFactory (7 tests)
-- TrainingArgumentsFactory (8 tests)
-- ArtifactValidator (12 tests)
-- QLoRATrainingRunner (7 tests)
-- TrainingMetadataBuilder (3 tests)
-- OOMErrorMessage (1 test)
-- DatasetPathResolution (2 tests)
-- TrainingModuleInit (1 test)
-- Integration / edge-case tests (5+ tests)
-- Phase 4.3 Colab Validation (20 tests)
-
-Total: 155+ tests
+- ModelConfig / SUPPORTED_MODELS registry
+- DatasetLoader
+- AlpacaFormatter
+- TrainingArgumentsFactory
+- ArtifactValidator
+- QLoRATrainingRunner
+- TrainingMetadataBuilder
+- OOMErrorMessage
+- DatasetPathResolution
+- TrainingModuleInit
+- Integration / edge-case tests
+- Phase 4.3 Colab Validation
 """
 
 from __future__ import annotations
@@ -146,397 +141,6 @@ class TestModelConfig:
 # ============================================================================
 
 
-class TestDatasetNormalizer:
-    """Tests for DatasetNormalizer (CSV/JSON/JSONL → Alpaca JSONL)."""
-
-    # ------------------------------------------------------------------
-    # normalize() — format detection
-    # ------------------------------------------------------------------
-
-    def test_normalize_jsonl_passthrough(self, tmp_path):
-        """normalize() should pass through valid JSONL."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        jsonl_path = tmp_path / "data.jsonl"
-        jsonl_path.write_text(
-            json.dumps({"instruction": "A", "input": "B", "output": "C"}) + "\n",
-            encoding="utf-8",
-        )
-
-        records = DatasetNormalizer.normalize(jsonl_path)
-        assert len(records) == 1
-        assert records[0] == {"instruction": "A", "input": "B", "output": "C"}
-
-    def test_normalize_json_array(self, tmp_path):
-        """normalize() should convert JSON array to Alpaca records."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        json_path = tmp_path / "data.json"
-        json_path.write_text(
-            json.dumps([
-                {"instruction": "Do X", "input": "context", "output": "result"},
-                {"instruction": "Do Y", "input": "", "output": "result2"},
-            ]),
-            encoding="utf-8",
-        )
-
-        records = DatasetNormalizer.normalize(json_path)
-        assert len(records) == 2
-        assert records[0]["instruction"] == "Do X"
-        assert records[1]["instruction"] == "Do Y"
-
-    def test_normalize_csv(self, tmp_path):
-        """normalize() should convert CSV to Alpaca records."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        csv_path = tmp_path / "data.csv"
-        csv_path.write_text(
-            "instruction,input,output\n"
-            "Do X,context,result\n"
-            "Do Y,,result2\n",
-            encoding="utf-8",
-        )
-
-        records = DatasetNormalizer.normalize(csv_path)
-        assert len(records) == 2
-        assert records[0]["instruction"] == "Do X"
-        assert records[0]["input"] == "context"
-        assert records[0]["output"] == "result"
-
-    def test_normalize_file_not_found(self):
-        """normalize() should raise FileNotFoundError for missing file."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        with pytest.raises(FileNotFoundError, match="Dataset file not found"):
-            DatasetNormalizer.normalize("/nonexistent/path.jsonl")
-
-    def test_normalize_unsupported_format(self, tmp_path):
-        """normalize() should raise ValueError for unsupported format."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        txt_path = tmp_path / "data.txt"
-        txt_path.write_text("some text", encoding="utf-8")
-
-        with pytest.raises(ValueError, match="Unsupported dataset format"):
-            DatasetNormalizer.normalize(txt_path)
-
-    def test_normalize_unsupported_format_message(self, tmp_path):
-        """Error message should list supported formats."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        txt_path = tmp_path / "data.xml"
-        txt_path.write_text("<data/>", encoding="utf-8")
-
-        with pytest.raises(ValueError, match=".jsonl, .json, .csv"):
-            DatasetNormalizer.normalize(txt_path)
-
-    # ------------------------------------------------------------------
-    # _normalize_jsonl()
-    # ------------------------------------------------------------------
-
-    def test_normalize_jsonl_multiple_records(self, tmp_path):
-        """Should load multiple JSONL records."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        jsonl_path = tmp_path / "data.jsonl"
-        lines = [
-            {"instruction": "A1", "input": "B1", "output": "C1"},
-            {"instruction": "A2", "input": "B2", "output": "C2"},
-            {"instruction": "A3", "input": "B3", "output": "C3"},
-        ]
-        jsonl_path.write_text(
-            "\n".join(json.dumps(r) for r in lines),
-            encoding="utf-8",
-        )
-
-        records = DatasetNormalizer.normalize(jsonl_path)
-        assert len(records) == 3
-
-    def test_normalize_jsonl_schema_validation_fails(self, tmp_path):
-        """Should raise ValueError when JSONL records fail schema validation."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        jsonl_path = tmp_path / "data.jsonl"
-        jsonl_path.write_text(
-            json.dumps({"bad_key": "value"}) + "\n",
-            encoding="utf-8",
-        )
-
-        with pytest.raises(ValueError, match="Alpaca schema validation failed"):
-            DatasetNormalizer.normalize(jsonl_path)
-
-    def test_normalize_jsonl_empty_input_allowed(self, tmp_path):
-        """Should allow empty input field in JSONL."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        jsonl_path = tmp_path / "data.jsonl"
-        jsonl_path.write_text(
-            json.dumps({"instruction": "A", "input": "", "output": "C"}) + "\n",
-            encoding="utf-8",
-        )
-
-        records = DatasetNormalizer.normalize(jsonl_path)
-        assert records[0]["input"] == ""
-
-    # ------------------------------------------------------------------
-    # _normalize_json()
-    # ------------------------------------------------------------------
-
-    def test_normalize_json_not_array(self, tmp_path):
-        """Should raise ValueError when JSON is not an array."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        json_path = tmp_path / "data.json"
-        json_path.write_text('{"key": "value"}', encoding="utf-8")
-
-        with pytest.raises(ValueError, match="must contain an array"):
-            DatasetNormalizer.normalize(json_path)
-
-    def test_normalize_json_empty_array(self, tmp_path):
-        """Should raise ValueError when JSON array is empty."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        json_path = tmp_path / "data.json"
-        json_path.write_text("[]", encoding="utf-8")
-
-        with pytest.raises(ValueError, match="empty"):
-            DatasetNormalizer.normalize(json_path)
-
-    def test_normalize_json_with_alias_mapping(self, tmp_path):
-        """Should map JSON records using alias resolution."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        json_path = tmp_path / "data.json"
-        json_path.write_text(
-            json.dumps([
-                {"prompt": "Do X", "context": "ctx", "answer": "result"},
-            ]),
-            encoding="utf-8",
-        )
-
-        records = DatasetNormalizer.normalize(json_path)
-        assert records[0]["instruction"] == "Do X"
-        assert records[0]["input"] == "ctx"
-        assert records[0]["output"] == "result"
-
-    def test_normalize_json_schema_validation_fails(self, tmp_path):
-        """Should raise ValueError when mapped JSON fails schema validation."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        json_path = tmp_path / "data.json"
-        json_path.write_text(
-            json.dumps([{"unknown_col": "value"}]),
-            encoding="utf-8",
-        )
-
-        with pytest.raises(ValueError, match="Cannot map"):
-            DatasetNormalizer.normalize(json_path)
-
-    # ------------------------------------------------------------------
-    # _normalize_csv()
-    # ------------------------------------------------------------------
-
-    def test_normalize_csv_no_header(self, tmp_path):
-        """Should raise ValueError when CSV has no header row."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        csv_path = tmp_path / "data.csv"
-        csv_path.write_text("", encoding="utf-8")
-
-        with pytest.raises(ValueError, match="no header"):
-            DatasetNormalizer.normalize(csv_path)
-
-    def test_normalize_csv_no_data_rows(self, tmp_path):
-        """Should raise ValueError when CSV has only header."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        csv_path = tmp_path / "data.csv"
-        csv_path.write_text("instruction,input,output\n", encoding="utf-8")
-
-        with pytest.raises(ValueError, match="no data rows"):
-            DatasetNormalizer.normalize(csv_path)
-
-    def test_normalize_csv_with_alias_mapping(self, tmp_path):
-        """Should map CSV columns using alias resolution."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        csv_path = tmp_path / "data.csv"
-        csv_path.write_text(
-            "question,context,answer\n"
-            "What is X?,some context,result\n",
-            encoding="utf-8",
-        )
-
-        records = DatasetNormalizer.normalize(csv_path)
-        assert records[0]["instruction"] == "What is X?"
-        assert records[0]["input"] == "some context"
-        assert records[0]["output"] == "result"
-
-    def test_normalize_csv_schema_validation_fails(self, tmp_path):
-        """Should raise ValueError when mapped CSV fails schema validation."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        csv_path = tmp_path / "data.csv"
-        csv_path.write_text(
-            "col_a,col_b\n"
-            "val1,val2\n",
-            encoding="utf-8",
-        )
-
-        with pytest.raises(ValueError, match="Cannot map"):
-            DatasetNormalizer.normalize(csv_path)
-
-    # ------------------------------------------------------------------
-    # _map_records()
-    # ------------------------------------------------------------------
-
-    def test_map_records_standard_keys(self):
-        """Should map records with standard instruction/input/output keys."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        records = [
-            {"instruction": "A", "input": "B", "output": "C"},
-        ]
-        mapped = DatasetNormalizer._map_records(records)
-        assert mapped[0] == {"instruction": "A", "input": "B", "output": "C"}
-
-    def test_map_records_empty_list(self):
-        """Should return empty list for empty input."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        assert DatasetNormalizer._map_records([]) == []
-
-    def test_map_records_missing_input_field(self):
-        """Should set input to empty string when no input alias matches."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        records = [
-            {"instruction": "A", "output": "C"},
-        ]
-        mapped = DatasetNormalizer._map_records(records)
-        assert mapped[0]["input"] == ""
-
-    def test_map_records_missing_instruction_raises(self):
-        """Should raise ValueError when no instruction alias matches."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        records = [
-            {"output": "C"},
-        ]
-        with pytest.raises(ValueError, match="Cannot map 'instruction'"):
-            DatasetNormalizer._map_records(records)
-
-    def test_map_records_missing_output_raises(self):
-        """Should raise ValueError when no output alias matches."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        records = [
-            {"instruction": "A"},
-        ]
-        with pytest.raises(ValueError, match="Cannot map 'output'"):
-            DatasetNormalizer._map_records(records)
-
-    # ------------------------------------------------------------------
-    # _resolve_alias()
-    # ------------------------------------------------------------------
-
-    def test_resolve_alias_first_match_wins(self):
-        """Should return the first matching alias in priority order."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        result = DatasetNormalizer._resolve_alias(
-            {"prompt", "instruction"},
-            ["instruction", "prompt", "question"],
-            "instruction",
-        )
-        assert result == "instruction"
-
-    def test_resolve_alias_second_alias(self):
-        """Should match second alias when first is not present."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        result = DatasetNormalizer._resolve_alias(
-            {"prompt", "output"},
-            ["instruction", "prompt", "question"],
-            "instruction",
-        )
-        assert result == "prompt"
-
-    def test_resolve_alias_required_missing_raises(self):
-        """Should raise ValueError when required alias not found."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        with pytest.raises(ValueError, match="Cannot map 'instruction'"):
-            DatasetNormalizer._resolve_alias(
-                {"col_a", "col_b"},
-                ["instruction", "prompt", "question"],
-                "instruction",
-                required=True,
-            )
-
-    def test_resolve_alias_not_required_returns_none(self):
-        """Should return None when alias not found and not required."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        result = DatasetNormalizer._resolve_alias(
-            {"col_a"},
-            ["input", "context"],
-            "input",
-            required=False,
-        )
-        assert result is None
-
-    def test_resolve_alias_error_message_includes_available(self):
-        """Error message should list available columns."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        with pytest.raises(ValueError, match="col_a"):
-            DatasetNormalizer._resolve_alias(
-                {"col_a", "col_b"},
-                ["instruction"],
-                "instruction",
-                required=True,
-            )
-
-    # ------------------------------------------------------------------
-    # Alias constants
-    # ------------------------------------------------------------------
-
-    def test_instruction_aliases(self):
-        """Should have correct instruction aliases."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        assert "instruction" in DatasetNormalizer.INSTRUCTION_ALIASES
-        assert "prompt" in DatasetNormalizer.INSTRUCTION_ALIASES
-        assert "question" in DatasetNormalizer.INSTRUCTION_ALIASES
-        assert "task" in DatasetNormalizer.INSTRUCTION_ALIASES
-        assert "query" in DatasetNormalizer.INSTRUCTION_ALIASES
-
-    def test_input_aliases(self):
-        """Should have correct input aliases."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        assert "input" in DatasetNormalizer.INPUT_ALIASES
-        assert "context" in DatasetNormalizer.INPUT_ALIASES
-        assert "input_text" in DatasetNormalizer.INPUT_ALIASES
-        assert "background" in DatasetNormalizer.INPUT_ALIASES
-
-    def test_output_aliases(self):
-        """Should have correct output aliases."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-
-        assert "output" in DatasetNormalizer.OUTPUT_ALIASES
-        assert "response" in DatasetNormalizer.OUTPUT_ALIASES
-        assert "answer" in DatasetNormalizer.OUTPUT_ALIASES
-        assert "target" in DatasetNormalizer.OUTPUT_ALIASES
-        assert "completion" in DatasetNormalizer.OUTPUT_ALIASES
-
-
-# ============================================================================
-# Dataset Loader Tests
-# ============================================================================
-
-
 class TestDatasetLoader:
     """Tests for DatasetLoader (JSONL loading, validation, counting, HF Dataset)."""
 
@@ -632,22 +236,6 @@ class TestDatasetLoader:
         ]
         errors = DatasetLoader.validate_alpaca_schema(records)
         assert errors == []
-
-    def test_count_examples(self):
-        """Should return correct count of records."""
-        from app.training.dataset_loader import DatasetLoader
-
-        records = [
-            {"instruction": "A", "input": "B", "output": "C"},
-            {"instruction": "D", "input": "E", "output": "F"},
-        ]
-        assert DatasetLoader.count_examples(records) == 2
-
-    def test_count_examples_empty(self):
-        """Should return 0 for empty list."""
-        from app.training.dataset_loader import DatasetLoader
-
-        assert DatasetLoader.count_examples([]) == 0
 
     def test_load_dataset_returns_hf_dataset(self, tmp_path):
         """load_dataset() should return a HuggingFace Dataset."""
@@ -810,19 +398,6 @@ class TestDatasetLoader:
         errors = DatasetLoader.validate_alpaca_schema(records)
         assert errors == []
 
-    def test_count_examples(self):
-        """Should return correct count of records."""
-        from app.training.dataset_loader import DatasetLoader
-
-        records = [{"instruction": f"A{i}", "input": "", "output": f"B{i}"} for i in range(5)]
-        assert DatasetLoader.count_examples(records) == 5
-
-    def test_count_examples_empty(self):
-        """Should return 0 for empty list."""
-        from app.training.dataset_loader import DatasetLoader
-
-        assert DatasetLoader.count_examples([]) == 0
-
 
 # ---------------------------------------------------------------------------
 # Alpaca Formatter Tests
@@ -830,7 +405,7 @@ class TestDatasetLoader:
 
 
 class TestAlpacaFormatter:
-    """Tests for AlpacaFormatter (Alpaca → ### Instruction/Response formatting)."""
+    """Tests for AlpacaFormatter (Alpaca â†’ ### Instruction/Response formatting)."""
 
     def test_format_example_with_input(self):
         """Should format a record with instruction, input, and output."""
@@ -858,19 +433,6 @@ class TestAlpacaFormatter:
         assert "### Input:" not in result
         assert "### Response:" in result
         assert "Hola" in result
-
-    def test_format_example_with_model_config(self):
-        """Should accept model_config parameter (unused, backward compat)."""
-        from app.training.alpaca_formatter import AlpacaFormatter
-        from app.training.model_registry import get_model_config
-
-        config = get_model_config("google/gemma-3-1b-it")
-        record = {"instruction": "Test", "input": "ctx", "output": "Result"}
-
-        result = AlpacaFormatter.format_example(record, model_config=config)
-        assert "### Instruction:" in result
-        assert "Test" in result
-        assert "### Response:" in result
 
     def test_format_dataset(self):
         """Should format all records in a dataset."""
@@ -931,183 +493,6 @@ class TestAlpacaFormatter:
 
         result = AlpacaFormatter.format_example(record)
         assert "  Trim test  " in result
-
-
-# ---------------------------------------------------------------------------
-# QLoRA Config Factory Tests (mocked)
-# ---------------------------------------------------------------------------
-
-
-class TestQLoRAConfigFactory:
-    """Tests for QLoRAConfigFactory (BitsAndBytesConfig creation).
-
-    These tests mock the transformers import since we don't have
-    GPU/ML dependencies in the test environment.
-    """
-
-    def test_create_bnb_config_returns_config(self):
-        """Should return a BitsAndBytesConfig-like object."""
-        from app.training.qlora_config import QLoRAConfigFactory
-
-        with patch("transformers.BitsAndBytesConfig") as mock_bnb:
-            mock_bnb.return_value = MagicMock()
-            config = QLoRAConfigFactory.create_bnb_config()
-
-            mock_bnb.assert_called_once()
-
-    def test_create_bnb_config_load_in_4bit(self):
-        """Should set load_in_4bit=True."""
-        from app.training.qlora_config import QLoRAConfigFactory
-
-        with patch("transformers.BitsAndBytesConfig") as mock_bnb:
-            mock_bnb.return_value = MagicMock()
-            QLoRAConfigFactory.create_bnb_config()
-
-            _, kwargs = mock_bnb.call_args
-            assert kwargs["load_in_4bit"] is True
-
-    def test_create_bnb_config_nf4(self):
-        """Should set bnb_4bit_quant_type='nf4'."""
-        from app.training.qlora_config import QLoRAConfigFactory
-
-        with patch("transformers.BitsAndBytesConfig") as mock_bnb:
-            mock_bnb.return_value = MagicMock()
-            QLoRAConfigFactory.create_bnb_config()
-
-            _, kwargs = mock_bnb.call_args
-            assert kwargs["bnb_4bit_quant_type"] == "nf4"
-
-    def test_create_bnb_config_double_quant(self):
-        """Should set bnb_4bit_use_double_quant=True."""
-        from app.training.qlora_config import QLoRAConfigFactory
-
-        with patch("transformers.BitsAndBytesConfig") as mock_bnb:
-            mock_bnb.return_value = MagicMock()
-            QLoRAConfigFactory.create_bnb_config()
-
-            _, kwargs = mock_bnb.call_args
-            assert kwargs["bnb_4bit_use_double_quant"] is True
-
-    def test_create_bnb_config_float16_dtype(self):
-        """Should set bnb_4bit_compute_dtype=torch.float16."""
-        from app.training.qlora_config import QLoRAConfigFactory
-
-        with patch("transformers.BitsAndBytesConfig") as mock_bnb:
-            mock_bnb.return_value = MagicMock()
-            QLoRAConfigFactory.create_bnb_config()
-
-            _, kwargs = mock_bnb.call_args
-            import torch
-            assert kwargs["bnb_4bit_compute_dtype"] == torch.float16
-
-    def test_create_bnb_config_all_params(self):
-        """Should pass all 4 QLoRA parameters to BitsAndBytesConfig."""
-        from app.training.qlora_config import QLoRAConfigFactory
-
-        with patch("transformers.BitsAndBytesConfig") as mock_bnb:
-            mock_bnb.return_value = MagicMock()
-            QLoRAConfigFactory.create_bnb_config()
-
-            _, kwargs = mock_bnb.call_args
-            assert kwargs["load_in_4bit"] is True
-            assert kwargs["bnb_4bit_quant_type"] == "nf4"
-            assert kwargs["bnb_4bit_use_double_quant"] is True
-            assert "bnb_4bit_compute_dtype" in kwargs
-
-
-# ---------------------------------------------------------------------------
-# PEFT Config Factory Tests (mocked)
-# ---------------------------------------------------------------------------
-
-
-class TestPEFTConfigFactory:
-    """Tests for PEFTConfigFactory (LoraConfig creation)."""
-
-    def _get_model_config(self):
-        from app.training.model_registry import get_model_config
-
-        return get_model_config("google/gemma-3-1b-it")
-
-    def test_create_lora_config_defaults(self):
-        """Should create LoraConfig with default hyperparameters."""
-        from app.training.peft_config import PEFTConfigFactory
-
-        model_config = self._get_model_config()
-
-        with patch("peft.LoraConfig") as mock_lora:
-            mock_lora.return_value = MagicMock()
-            PEFTConfigFactory.create_lora_config(model_config)
-
-            _, kwargs = mock_lora.call_args
-            assert kwargs["r"] == 16
-            assert kwargs["lora_alpha"] == 32
-            assert kwargs["lora_dropout"] == 0.05
-            assert kwargs["bias"] == "none"
-
-    def test_create_lora_config_target_modules(self):
-        """Should use 7 target modules from model config."""
-        from app.training.peft_config import PEFTConfigFactory
-
-        model_config = self._get_model_config()
-
-        with patch("peft.LoraConfig") as mock_lora:
-            mock_lora.return_value = MagicMock()
-            PEFTConfigFactory.create_lora_config(model_config)
-
-            _, kwargs = mock_lora.call_args
-            assert kwargs["target_modules"] == [
-                "q_proj", "k_proj", "v_proj", "o_proj",
-                "gate_proj", "up_proj", "down_proj",
-            ]
-
-    def test_create_lora_config_custom_r(self):
-        """Should accept custom LoRA rank."""
-        from app.training.peft_config import PEFTConfigFactory
-
-        model_config = self._get_model_config()
-
-        with patch("peft.LoraConfig") as mock_lora:
-            mock_lora.return_value = MagicMock()
-            PEFTConfigFactory.create_lora_config(model_config, r=32)
-
-            _, kwargs = mock_lora.call_args
-            assert kwargs["r"] == 32
-
-    def test_create_lora_config_custom_alpha(self):
-        """Should accept custom LoRA alpha."""
-        from app.training.peft_config import PEFTConfigFactory
-
-        model_config = self._get_model_config()
-
-        with patch("peft.LoraConfig") as mock_lora:
-            mock_lora.return_value = MagicMock()
-            PEFTConfigFactory.create_lora_config(model_config, lora_alpha=64)
-
-            _, kwargs = mock_lora.call_args
-            assert kwargs["lora_alpha"] == 64
-
-    def test_create_lora_config_task_type_causal_lm(self):
-        """Should set task_type to CAUSAL_LM."""
-        from app.training.peft_config import PEFTConfigFactory
-        from peft import TaskType
-
-        model_config = self._get_model_config()
-
-        with patch("peft.LoraConfig") as mock_lora:
-            mock_lora.return_value = MagicMock()
-            PEFTConfigFactory.create_lora_config(model_config)
-
-            _, kwargs = mock_lora.call_args
-            assert kwargs["task_type"] == TaskType.CAUSAL_LM
-
-    def test_default_constants(self):
-        """Should have correct default constants."""
-        from app.training.peft_config import PEFTConfigFactory
-
-        assert PEFTConfigFactory.DEFAULT_R == 16
-        assert PEFTConfigFactory.DEFAULT_ALPHA == 32
-        assert PEFTConfigFactory.DEFAULT_DROPOUT == 0.05
-        assert PEFTConfigFactory.DEFAULT_BIAS == "none"
 
 
 # ---------------------------------------------------------------------------
@@ -1495,8 +880,8 @@ class TestQLoRATrainingRunner:
     @patch("app.workers.qlora_training_runner.prepare_model_for_kbit_training")
     @patch("app.workers.qlora_training_runner.SFTTrainer")
     @patch("app.workers.qlora_training_runner.HFDataset")
-    @patch("app.workers.qlora_training_runner.QLoRAConfigFactory")
-    @patch("app.workers.qlora_training_runner.PEFTConfigFactory")
+    @patch("app.workers.qlora_training_runner.BitsAndBytesConfig")
+    @patch("app.workers.qlora_training_runner.LoraConfig")
     @patch("app.workers.qlora_training_runner.TrainingArgumentsFactory")
     @patch("app.workers.qlora_training_runner.ArtifactValidator")
     @patch("app.workers.qlora_training_runner.DatasetLoader")
@@ -1507,8 +892,8 @@ class TestQLoRATrainingRunner:
         mock_dataset,
         mock_validator,
         mock_training_args,
-        mock_peft,
-        mock_qlora,
+        mock_lora,
+        mock_bnb,
         mock_hf_dataset,
         mock_sft_trainer,
         mock_prepare,
@@ -1519,7 +904,7 @@ class TestQLoRATrainingRunner:
         mock_get_session,
         tmp_path,
     ):
-        """Full happy-path test: job QUEUED → RUNNING → COMPLETED."""
+        """Full happy-path test: job QUEUED â†’ RUNNING â†’ COMPLETED."""
         from app.workers.qlora_training_runner import qlora_training_runner
 
         # Setup mock job
@@ -1567,11 +952,11 @@ class TestQLoRATrainingRunner:
         # Setup training args
         mock_training_args.create_training_args.return_value = MagicMock()
 
-        # Setup PEFT config
-        mock_peft.create_lora_config.return_value = MagicMock()
+        # Setup PEFT config (inlined — LoraConfig is called directly in the runner)
+        mock_lora.return_value = MagicMock()
 
-        # Setup QLoRA config
-        mock_qlora.create_bnb_config.return_value = MagicMock()
+        # Setup QLoRA config (inlined — BitsAndBytesConfig is called directly in the runner)
+        mock_bnb.return_value = MagicMock()
 
         # Setup artifact dir
         artifact_dir = tmp_path / "artifacts" / "00000000-0000-0000-0000-000000000001"
@@ -1678,8 +1063,8 @@ class TestQLoRATrainingRunner:
     @patch("app.workers.qlora_training_runner.prepare_model_for_kbit_training")
     @patch("app.workers.qlora_training_runner.SFTTrainer")
     @patch("app.workers.qlora_training_runner.HFDataset")
-    @patch("app.workers.qlora_training_runner.QLoRAConfigFactory")
-    @patch("app.workers.qlora_training_runner.PEFTConfigFactory")
+    @patch("app.workers.qlora_training_runner.BitsAndBytesConfig")
+    @patch("app.workers.qlora_training_runner.LoraConfig")
     @patch("app.workers.qlora_training_runner.TrainingArgumentsFactory")
     @patch("app.workers.qlora_training_runner.ArtifactValidator")
     @patch("app.workers.qlora_training_runner.DatasetLoader")
@@ -1690,8 +1075,8 @@ class TestQLoRATrainingRunner:
         mock_dataset,
         mock_validator,
         mock_training_args,
-        mock_peft,
-        mock_qlora,
+        mock_lora,
+        mock_bnb,
         mock_hf_dataset,
         mock_sft_trainer,
         mock_prepare,
@@ -1729,8 +1114,8 @@ class TestQLoRATrainingRunner:
         mock_auto_model.from_pretrained.return_value = MagicMock()
         mock_prepare.return_value = MagicMock()
         mock_get_peft.return_value = MagicMock()
-        mock_qlora.create_bnb_config.return_value = MagicMock()
-        mock_peft.create_lora_config.return_value = MagicMock()
+        mock_bnb.return_value = MagicMock()
+        mock_lora.return_value = MagicMock()
         mock_training_args.create_training_args.return_value = MagicMock()
 
         with patch(
@@ -1752,8 +1137,8 @@ class TestQLoRATrainingRunner:
     @patch("app.workers.qlora_training_runner.prepare_model_for_kbit_training")
     @patch("app.workers.qlora_training_runner.SFTTrainer")
     @patch("app.workers.qlora_training_runner.HFDataset")
-    @patch("app.workers.qlora_training_runner.QLoRAConfigFactory")
-    @patch("app.workers.qlora_training_runner.PEFTConfigFactory")
+    @patch("app.workers.qlora_training_runner.BitsAndBytesConfig")
+    @patch("app.workers.qlora_training_runner.LoraConfig")
     @patch("app.workers.qlora_training_runner.TrainingArgumentsFactory")
     @patch("app.workers.qlora_training_runner.ArtifactValidator")
     @patch("app.workers.qlora_training_runner.DatasetLoader")
@@ -1764,8 +1149,8 @@ class TestQLoRATrainingRunner:
         mock_dataset,
         mock_validator,
         mock_training_args,
-        mock_peft,
-        mock_qlora,
+        mock_lora,
+        mock_bnb,
         mock_hf_dataset,
         mock_sft_trainer,
         mock_prepare,
@@ -1797,8 +1182,8 @@ class TestQLoRATrainingRunner:
     @patch("app.workers.qlora_training_runner.prepare_model_for_kbit_training")
     @patch("app.workers.qlora_training_runner.SFTTrainer")
     @patch("app.workers.qlora_training_runner.HFDataset")
-    @patch("app.workers.qlora_training_runner.QLoRAConfigFactory")
-    @patch("app.workers.qlora_training_runner.PEFTConfigFactory")
+    @patch("app.workers.qlora_training_runner.BitsAndBytesConfig")
+    @patch("app.workers.qlora_training_runner.LoraConfig")
     @patch("app.workers.qlora_training_runner.TrainingArgumentsFactory")
     @patch("app.workers.qlora_training_runner.ArtifactValidator")
     @patch("app.workers.qlora_training_runner.DatasetLoader")
@@ -1809,8 +1194,8 @@ class TestQLoRATrainingRunner:
         mock_dataset,
         mock_validator,
         mock_training_args,
-        mock_peft,
-        mock_qlora,
+        mock_lora,
+        mock_bnb,
         mock_hf_dataset,
         mock_sft_trainer,
         mock_prepare,
@@ -1841,8 +1226,8 @@ class TestQLoRATrainingRunner:
             "Model download failed"
         )
 
-        mock_qlora.create_bnb_config.return_value = MagicMock()
-        mock_peft.create_lora_config.return_value = MagicMock()
+        mock_bnb.return_value = MagicMock()
+        mock_lora.return_value = MagicMock()
         mock_training_args.create_training_args.return_value = MagicMock()
 
         result = qlora_training_runner("00000000-0000-0000-0000-000000000001")
@@ -2092,10 +1477,7 @@ class TestTrainingModuleInit:
             AlpacaFormatter,
             ArtifactValidator,
             DatasetLoader,
-            DatasetNormalizer,
             ModelConfig,
-            PEFTConfigFactory,
-            QLoRAConfigFactory,
             SUPPORTED_MODELS,
             TrainingArgumentsFactory,
         )
@@ -2103,82 +1485,9 @@ class TestTrainingModuleInit:
         assert ModelConfig is not None
         assert SUPPORTED_MODELS is not None
         assert DatasetLoader is not None
-        assert DatasetNormalizer is not None
         assert AlpacaFormatter is not None
-        assert QLoRAConfigFactory is not None
-        assert PEFTConfigFactory is not None
         assert TrainingArgumentsFactory is not None
         assert ArtifactValidator is not None
-
-
-# ---------------------------------------------------------------------------
-# Additional PEFTConfigFactory Tests
-# ---------------------------------------------------------------------------
-
-
-class TestPEFTConfigFactoryExtended:
-    """Extended tests for PEFTConfigFactory."""
-
-    def _get_model_config(self):
-        from app.training.model_registry import get_model_config
-        return get_model_config("google/gemma-3-1b-it")
-
-    def test_create_lora_config_custom_dropout(self):
-        """Should accept custom LoRA dropout."""
-        from app.training.peft_config import PEFTConfigFactory
-
-        model_config = self._get_model_config()
-
-        with patch("peft.LoraConfig") as mock_lora:
-            mock_lora.return_value = MagicMock()
-            PEFTConfigFactory.create_lora_config(model_config, lora_dropout=0.1)
-
-            _, kwargs = mock_lora.call_args
-            assert kwargs["lora_dropout"] == 0.1
-
-    def test_create_lora_config_custom_bias(self):
-        """Should accept custom bias setting."""
-        from app.training.peft_config import PEFTConfigFactory
-
-        model_config = self._get_model_config()
-
-        with patch("peft.LoraConfig") as mock_lora:
-            mock_lora.return_value = MagicMock()
-            PEFTConfigFactory.create_lora_config(model_config, bias="all")
-
-            _, kwargs = mock_lora.call_args
-            assert kwargs["bias"] == "all"
-
-    def test_create_lora_config_zero_dropout(self):
-        """Should accept zero dropout."""
-        from app.training.peft_config import PEFTConfigFactory
-
-        model_config = self._get_model_config()
-
-        with patch("peft.LoraConfig") as mock_lora:
-            mock_lora.return_value = MagicMock()
-            PEFTConfigFactory.create_lora_config(model_config, lora_dropout=0.0)
-
-            _, kwargs = mock_lora.call_args
-            assert kwargs["lora_dropout"] == 0.0
-
-    def test_create_lora_config_all_custom_params(self):
-        """Should pass all custom parameters to LoraConfig."""
-        from app.training.peft_config import PEFTConfigFactory
-
-        model_config = self._get_model_config()
-
-        with patch("peft.LoraConfig") as mock_lora:
-            mock_lora.return_value = MagicMock()
-            PEFTConfigFactory.create_lora_config(
-                model_config, r=64, lora_alpha=128, lora_dropout=0.1, bias="lora_only"
-            )
-
-            _, kwargs = mock_lora.call_args
-            assert kwargs["r"] == 64
-            assert kwargs["lora_alpha"] == 128
-            assert kwargs["lora_dropout"] == 0.1
-            assert kwargs["bias"] == "lora_only"
 
 
 # ---------------------------------------------------------------------------
@@ -2328,29 +1637,8 @@ class TestOOMDetection:
 class TestIntegrationPipelines:
     """Integration tests combining multiple training module components."""
 
-    def test_normalizer_to_formatter_pipeline(self, tmp_path):
-        """DatasetNormalizer → AlpacaFormatter pipeline should work end-to-end."""
-        from app.training.dataset_normalizer import DatasetNormalizer
-        from app.training.alpaca_formatter import AlpacaFormatter
-
-        # Create a JSON file with alias fields
-        data = [{"prompt": "What is AI?", "context": "Tech", "response": "AI is..."}]
-        json_path = tmp_path / "data.json"
-        json_path.write_text(json.dumps(data), encoding="utf-8")
-
-        # Normalize
-        records = DatasetNormalizer.normalize(json_path)
-        assert len(records) == 1
-
-        # Format
-        formatted = AlpacaFormatter.format_dataset(records)
-        assert len(formatted) == 1
-        assert "### Instruction:" in formatted[0]
-        assert "### Response:" in formatted[0]
-        assert "What is AI?" in formatted[0]
-
     def test_loader_to_formatter_pipeline(self, tmp_path):
-        """DatasetLoader → AlpacaFormatter pipeline should work end-to-end."""
+        """DatasetLoader â†’ AlpacaFormatter pipeline should work end-to-end."""
         from app.training.dataset_loader import DatasetLoader
         from app.training.alpaca_formatter import AlpacaFormatter
 
@@ -2404,18 +1692,18 @@ class TestIntegrationPipelines:
 
 
 # ============================================================================
-# Phase 4.3 — Colab Validation Tests
+# Phase 4.3 â€” Colab Validation Tests
 # ============================================================================
 
 
 class TestPhase43ColabValidation:
-    """Tests for Phase 4.3 — Real Colab QLoRA Training Validation.
+    """Tests for Phase 4.3 â€” Real Colab QLoRA Training Validation.
 
     These tests verify that the training module components produce
     configurations and artifacts consistent with the Stage 0 Colab
     validation notebook (training/notebooks/phase43_qlora_validation.ipynb).
 
-    All tests run without GPU — ML dependencies are mocked.
+    All tests run without GPU â€” ML dependencies are mocked.
     """
 
     # Stage 0 configuration from docs/20_real_training_validation_plan.md
@@ -2443,61 +1731,6 @@ class TestPhase43ColabValidation:
         "bnb_4bit_use_double_quant": True,
         "load_in_4bit": True,
     }
-
-    # --- QLoRA Config Tests ---
-
-    def test_stage0_bnb_config_uses_float16(self):
-        """Stage 0 BitsAndBytesConfig must use float16 (T4 has no bfloat16)."""
-        with patch("transformers.BitsAndBytesConfig") as mock_bnb:
-            mock_bnb.return_value = MagicMock()
-            from app.training.qlora_config import QLoRAConfigFactory
-            import torch
-            QLoRAConfigFactory.create_bnb_config()
-            _, call_kwargs = mock_bnb.call_args
-            assert call_kwargs["bnb_4bit_compute_dtype"] == torch.float16
-
-    def test_stage0_bnb_config_nf4_double_quant(self):
-        """Stage 0 BitsAndBytesConfig must use NF4 with double quantization."""
-        with patch("transformers.BitsAndBytesConfig") as mock_bnb:
-            mock_bnb.return_value = MagicMock()
-            from app.training.qlora_config import QLoRAConfigFactory
-            QLoRAConfigFactory.create_bnb_config()
-            _, call_kwargs = mock_bnb.call_args
-            assert call_kwargs["bnb_4bit_quant_type"] == "nf4"
-            assert call_kwargs["bnb_4bit_use_double_quant"] is True
-            assert call_kwargs["load_in_4bit"] is True
-
-    # --- LoRA Config Tests ---
-
-    def test_stage0_lora_targets_7_modules(self):
-        """Stage 0 LoRA must target all 7 modules for Gemma 3."""
-        from app.training.model_registry import SUPPORTED_MODELS
-
-        config = SUPPORTED_MODELS["google/gemma-3-1b-it"]
-        assert len(config.lora_target_modules) == 7
-        expected = ["q_proj", "k_proj", "v_proj", "o_proj",
-                     "gate_proj", "up_proj", "down_proj"]
-        assert config.lora_target_modules == expected
-
-    def test_stage0_lora_config_params(self):
-        """Stage 0 LoRA config must use r=16, alpha=32, dropout=0.05."""
-        with patch("peft.LoraConfig") as mock_lora:
-            mock_lora.return_value = MagicMock()
-            from app.training.model_registry import SUPPORTED_MODELS
-            from app.training.peft_config import PEFTConfigFactory
-
-            model_config = SUPPORTED_MODELS["google/gemma-3-1b-it"]
-            PEFTConfigFactory.create_lora_config(model_config)
-
-            _, call_kwargs = mock_lora.call_args
-            assert call_kwargs["r"] == 16
-            assert call_kwargs["lora_alpha"] == 32
-            assert call_kwargs["lora_dropout"] == 0.05
-            assert call_kwargs["bias"] == "none"
-            assert call_kwargs["target_modules"] == [
-                "q_proj", "k_proj", "v_proj", "o_proj",
-                "gate_proj", "up_proj", "down_proj",
-            ]
 
     # --- Training Args Tests ---
 

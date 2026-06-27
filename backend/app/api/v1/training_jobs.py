@@ -1,15 +1,7 @@
 """Training job API routes.
 
-Endpoints:
-- POST   /training-jobs           — Create a training job.
-- GET    /training-jobs           — List training jobs for current user.
-- GET    /training-jobs/{id}      — Get a training job by ID.
-- POST   /training-jobs/{id}/cancel — Cancel a training job.
-
-Phase 3.2:
-- All endpoints enforce ownership at the service layer.
-- Only one ACTIVE (QUEUED or RUNNING) job per user at a time.
-- Dataset ownership is validated before job creation.
+Enforces ownership at the service layer; at most one ACTIVE (QUEUED
+or RUNNING) job per user.
 """
 
 from __future__ import annotations
@@ -41,15 +33,9 @@ from app.services.training_service import (
 router = APIRouter(prefix="/training-jobs", tags=["training-jobs"])
 
 
-# ---------------------------------------------------------------------------
-# Dependency helpers
-# ---------------------------------------------------------------------------
-
-
 def _get_training_service(
     db: DBSession,
 ) -> TrainingService:
-    """Build a TrainingService with all its dependencies."""
     return TrainingService(
         job_repo=TrainingJobRepository(db),
         dataset_repo=DatasetRepository(db),
@@ -58,11 +44,6 @@ def _get_training_service(
 
 
 TrainingServiceDep = Annotated[TrainingService, Depends(_get_training_service)]
-
-
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
 
 
 @router.post(
@@ -76,14 +57,7 @@ async def create_training_job(
     service: TrainingServiceDep,
     request: TrainingJobCreateRequest,
 ) -> SuccessResponse[TrainingJobResponse]:
-    """Create a new training job.
-
-    Validates:
-    - The dataset is owned by the current user.
-    - The user has no other ACTIVE (QUEUED or RUNNING) jobs.
-
-    On success the job is enqueued for background execution.
-    """
+    """Create and enqueue a new training job."""
     result = await service.create_job(
         user_id=current_user.id,
         request=request,
@@ -108,7 +82,7 @@ async def list_training_jobs(
         Query(ge=0, description="Number of items to skip"),
     ] = 0,
 ) -> SuccessResponse[TrainingJobListResponse]:
-    """Return a paginated list of training jobs for the current user."""
+    """Return a paginated list of the user's training jobs."""
     result = await service.list_jobs(
         user_id=current_user.id,
         limit=limit,
@@ -127,10 +101,7 @@ async def get_training_job(
     service: TrainingServiceDep,
     job_id: UUID,
 ) -> SuccessResponse[TrainingJobResponse]:
-    """Return a single training job by ID.
-
-    Only the job owner can view it.
-    """
+    """Return a training job by ID (owner only)."""
     result = await service.get_job(
         job_id,
         user_id=current_user.id,
@@ -148,10 +119,7 @@ async def cancel_training_job(
     service: TrainingServiceDep,
     job_id: UUID,
 ) -> SuccessResponse[TrainingJobResponse]:
-    """Cancel a training job.
-
-    Only QUEUED or RUNNING jobs can be cancelled.
-    """
+    """Cancel a QUEUED or RUNNING job (owner only)."""
     result = await service.cancel_job(
         job_id,
         user_id=current_user.id,

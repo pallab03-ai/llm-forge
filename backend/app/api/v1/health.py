@@ -1,7 +1,4 @@
-"""Health check endpoint.
-
-Provides service liveness/readiness per observability guardrails.
-"""
+"""Health check endpoint."""
 
 from fastapi import APIRouter
 
@@ -13,11 +10,6 @@ router = APIRouter(tags=["health"])
 
 @router.get("/health", response_model=SuccessResponse[HealthData])
 async def health_check() -> SuccessResponse[HealthData]:
-    """Return service health status.
-
-    Returns:
-        SuccessResponse containing health data.
-    """
     data = HealthData(
         status="healthy",
         version=settings.APP_VERSION,

@@ -1,14 +1,7 @@
-"""Dataset service.
+"""Dataset service: upload, validate, version, list, soft-delete.
 
-Orchestrates dataset upload, validation, versioning, listing, and
-soft-delete. This is the business-logic layer between API routes and
-repositories / storage / validation services.
-
-Per approved revisions:
-- LocalStorageService instead of MinIO.
-- version_number is an integer.
-- DatasetVersion.created_at is the upload timestamp.
-- Duplicate detection only inside the uploaded file.
+Owned by ``current_user_id``; access denied (403) when the caller
+isn't the owner. Duplicate detection is within-file only.
 """
 
 from __future__ import annotations
@@ -40,42 +33,29 @@ from app.services.storage_service import LocalStorageService, StorageError
 from app.services.validation_service import ValidationResult, ValidationService
 
 
-# ---------------------------------------------------------------------------
-# Domain exceptions
-# ---------------------------------------------------------------------------
-
-
 class DatasetError(Exception):
-    """Base exception for dataset-related errors."""
+    """Base exception for dataset errors."""
 
 
 class DatasetNotFoundError(DatasetError):
-    """Raised when a dataset does not exist."""
-
     def __init__(self, dataset_id: UUID) -> None:
         self.dataset_id = dataset_id
         super().__init__(f"Dataset not found: {dataset_id}")
 
 
 class DatasetNameExistsError(DatasetError):
-    """Raised when a dataset with the same name already exists."""
-
     def __init__(self, name: str) -> None:
         self.name = name
         super().__init__(f"Dataset with name '{name}' already exists.")
 
 
 class DatasetValidationError(DatasetError):
-    """Raised when a dataset file fails validation."""
-
     def __init__(self, errors: list[str]) -> None:
         self.errors = errors
         super().__init__(f"Validation failed: {', '.join(errors)}")
 
 
 class DatasetVersionNotFoundError(DatasetError):
-    """Raised when a dataset version does not exist."""
-
     def __init__(self, dataset_id: UUID, version_number: int) -> None:
         self.dataset_id = dataset_id
         self.version_number = version_number
@@ -85,16 +65,8 @@ class DatasetVersionNotFoundError(DatasetError):
 
 
 class DatasetAccessDeniedError(DatasetError):
-    """Raised when a user attempts to access a dataset they do not own.
-
-    Phase 2.1: This is raised by the service layer when the requesting
-    user is not the owner of the dataset. The API layer maps this to a
-    403 Forbidden response. We deliberately do NOT distinguish between
-    "dataset does not exist" and "dataset exists but you don't own it"
-    in the response body — both surface as 403 to avoid leaking the
-    existence of other users' datasets.
-    """
-
+    # Surfaces 403 for both "doesn't exist" and "exists but not yours"
+    # so the response body never leaks which case it was.
     def __init__(self, dataset_id: UUID) -> None:
         self.dataset_id = dataset_id
         super().__init__(
@@ -102,14 +74,7 @@ class DatasetAccessDeniedError(DatasetError):
         )
 
 
-# ---------------------------------------------------------------------------
-# Service
-# ---------------------------------------------------------------------------
-
-
 class DatasetService:
-    """Business logic for dataset management."""
-
     def __init__(
         self,
         dataset_repo: DatasetRepository,
@@ -122,10 +87,6 @@ class DatasetService:
         self._storage = storage
         self._validator = validator
 
-    # ------------------------------------------------------------------
-    # Upload
-    # ------------------------------------------------------------------
-
     async def upload(
         self,
         *,
@@ -137,25 +98,9 @@ class DatasetService:
         current_user_id: UUID,
         description: str | None = None,
     ) -> DatasetDetailResponse:
-        """Upload a new dataset (creates dataset + version 1).
-
-        Workflow:
-        1. Check name uniqueness.
-        2. Create Dataset row (status=uploading) owned by ``current_user_id``.
-        3. Save file to local storage.
-        4. Validate the file.
-        5. Create DatasetVersion row.
-        6. Update Dataset status to ready/failed.
-
-        Phase 2.1: ``current_user_id`` is REQUIRED and is recorded as the
-        dataset owner (``created_by``). All subsequent access checks use
-        this field.
-        """
-        # 1. Name uniqueness
         if await self._datasets.name_exists(name):
             raise DatasetNameExistsError(name)
 
-        # 2. Create dataset (owned by current_user_id)
         dataset = Dataset(
             name=name,
             description=description,
@@ -166,7 +111,6 @@ class DatasetService:
         )
         await self._datasets.add(dataset)
 
-        # 3. Save file
         version_number = 1
         try:
             relative_path = await self._storage.save_file(
@@ -180,7 +124,6 @@ class DatasetService:
             await self._datasets.commit()
             raise DatasetError(f"Failed to store file: {exc}") from exc
 
-        # 4. Validate
         abs_path = self._storage.get_absolute_path(relative_path)
         validation = await self._validator.validate(
             file_path=abs_path,
@@ -188,7 +131,6 @@ class DatasetService:
             dataset_type=dataset_type,
         )
 
-        # 5. Create version
         version = DatasetVersion(
             dataset_id=dataset.id,
             version_number=version_number,
@@ -209,22 +151,16 @@ class DatasetService:
         )
         await self._versions.add(version)
 
-        # 6. Update dataset status
         dataset.status = (
             DatasetStatus.READY if validation.is_valid else DatasetStatus.FAILED
         )
         await self._datasets.commit()
-        # Phase 2.1: Refresh to load server-generated `updated_at` after
-        # commit. Without this, Pydantic validation in
-        # `_to_detail_response` triggers a lazy-load from a sync context,
-        # raising `MissingGreenlet` in async sessions.
+        # Refresh so server-generated updated_at is loaded; otherwise
+        # Pydantic validation in _to_detail_response triggers a
+        # lazy-load from a sync context (MissingGreenlet in async).
         await self._datasets.session.refresh(dataset)
 
         return self._to_detail_response(dataset, [version])
-
-    # ------------------------------------------------------------------
-    # Upload new version
-    # ------------------------------------------------------------------
 
     async def upload_version(
         self,
@@ -234,30 +170,15 @@ class DatasetService:
         filename: str,
         current_user_id: UUID,
     ) -> DatasetDetailResponse:
-        """Upload a new version of an existing dataset.
-
-        Phase 2.1: ``current_user_id`` is REQUIRED. The dataset is loaded
-        via ``get_by_id_and_owner`` so that a non-owner cannot upload a
-        version to someone else's dataset. We raise
-        ``DatasetAccessDeniedError`` (mapped to 403) rather than
-        ``DatasetNotFoundError`` so the API layer can distinguish
-        "doesn't exist" from "exists but not yours" — but the response
-        body intentionally does not leak which case occurred.
-        """
         dataset = await self._datasets.get_by_id_and_owner(
             dataset_id, current_user_id
         )
         if dataset is None:
-            # Could be: doesn't exist, soft-deleted, or owned by someone
-            # else. We surface 403 in all three cases to avoid leaking
-            # existence of other users' datasets.
             raise DatasetAccessDeniedError(dataset_id)
 
-        # Determine next version number
         latest = await self._versions.get_latest_version_number(dataset_id)
         version_number = latest + 1
 
-        # Save file
         try:
             relative_path = await self._storage.save_file(
                 dataset_id=dataset.id,
@@ -268,7 +189,6 @@ class DatasetService:
         except StorageError as exc:
             raise DatasetError(f"Failed to store file: {exc}") from exc
 
-        # Validate
         abs_path = self._storage.get_absolute_path(relative_path)
         validation = await self._validator.validate(
             file_path=abs_path,
@@ -276,7 +196,6 @@ class DatasetService:
             dataset_type=dataset.dataset_type,
         )
 
-        # Create version
         version = DatasetVersion(
             dataset_id=dataset.id,
             version_number=version_number,
@@ -297,22 +216,14 @@ class DatasetService:
         )
         await self._versions.add(version)
 
-        # Update dataset status
         dataset.status = (
             DatasetStatus.READY if validation.is_valid else DatasetStatus.FAILED
         )
         await self._datasets.commit()
-        # Phase 2.1: Refresh to load server-generated `updated_at` after
-        # commit. See `upload()` for rationale.
         await self._datasets.session.refresh(dataset)
 
-        # Reload versions
         versions = await self._versions.list_by_dataset(dataset.id)
         return self._to_detail_response(dataset, versions)
-
-    # ------------------------------------------------------------------
-    # Queries
-    # ------------------------------------------------------------------
 
     async def list_datasets(
         self,
@@ -321,11 +232,6 @@ class DatasetService:
         limit: int = 100,
         offset: int = 0,
     ) -> DatasetListResponse:
-        """Return a paginated list of active datasets owned by the user.
-
-        Phase 2.1: Results are filtered to datasets owned by
-        ``current_user_id``. Users only see their own datasets.
-        """
         items = await self._datasets.list_active(
             owner_id=current_user_id, limit=limit, offset=offset
         )
@@ -340,11 +246,6 @@ class DatasetService:
     async def get_dataset(
         self, dataset_id: UUID, *, current_user_id: UUID
     ) -> DatasetDetailResponse:
-        """Return a dataset with all its versions.
-
-        Phase 2.1: Only the owner can read a dataset. Non-owners get
-        ``DatasetAccessDeniedError`` (403).
-        """
         dataset = await self._datasets.get_by_id_and_owner(
             dataset_id, current_user_id
         )
@@ -356,11 +257,6 @@ class DatasetService:
     async def get_versions(
         self, dataset_id: UUID, *, current_user_id: UUID
     ) -> list[DatasetVersionResponse]:
-        """Return all versions for a dataset.
-
-        Phase 2.1: Only the owner can list versions. Non-owners get
-        ``DatasetAccessDeniedError`` (403).
-        """
         dataset = await self._datasets.get_by_id_and_owner(
             dataset_id, current_user_id
         )
@@ -372,11 +268,6 @@ class DatasetService:
     async def get_statistics(
         self, dataset_id: UUID, *, current_user_id: UUID
     ) -> DatasetStatisticsResponse:
-        """Return aggregated statistics for a dataset.
-
-        Phase 2.1: Only the owner can read statistics. Non-owners get
-        ``DatasetAccessDeniedError`` (403).
-        """
         dataset = await self._datasets.get_by_id_and_owner(
             dataset_id, current_user_id
         )
@@ -399,29 +290,15 @@ class DatasetService:
             versions=version_responses,
         )
 
-    # ------------------------------------------------------------------
-    # Delete
-    # ------------------------------------------------------------------
-
     async def soft_delete(
         self, dataset_id: UUID, *, current_user_id: UUID
     ) -> None:
-        """Soft-delete a dataset.
-
-        Phase 2.1: Only the owner can delete. Non-owners get
-        ``DatasetAccessDeniedError`` (403).
-        """
         deleted = await self._datasets.soft_delete(
             dataset_id, owner_id=current_user_id
         )
         if not deleted:
-            # Either doesn't exist, already deleted, or not owned by
-            # current_user. Surface as 403 to avoid leaking existence.
+            # Doesn't exist, already deleted, or not the owner.
             raise DatasetAccessDeniedError(dataset_id)
-
-    # ------------------------------------------------------------------
-    # Response builders
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _to_response(dataset: Dataset) -> DatasetResponse:

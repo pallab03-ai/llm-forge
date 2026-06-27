@@ -1,16 +1,6 @@
-"""Metric computation functions for the Evaluation Service.
+"""Evaluation metrics: ROUGE-L, BERTScore, semantic similarity.
 
-MVP metrics:
-- ROUGE-L (rouge-score package)
-- BERTScore (bert-score package)
-- Semantic Similarity (sentence-transformers package)
-
-All heavy ML imports are LAZY (inside function bodies) so the module
-imports cleanly in test environments without torch/transformers installed.
-Tests patch these functions at the module level.
-
-Each function takes parallel lists of predictions and references,
-returns a float (or tuple for BERTScore). Raises MetricError on failure.
+Heavy ML imports are lazy so the module loads without torch/transformers.
 """
 
 from __future__ import annotations
@@ -20,11 +10,7 @@ class MetricError(Exception):
     """Raised when a metric computation fails."""
 
 
-def compute_rouge_l(predictions: list[str], references: list[str]) -> float:
-    """Compute mean ROUGE-L F1 over prediction/reference pairs.
-
-    Returns a float in [0.0, 1.0].
-    """
+def _validate_inputs(predictions: list[str], references: list[str]) -> None:
     if not predictions or not references:
         raise MetricError("predictions and references must be non-empty")
     if len(predictions) != len(references):
@@ -32,32 +18,24 @@ def compute_rouge_l(predictions: list[str], references: list[str]) -> float:
             f"length mismatch: {len(predictions)} predictions vs "
             f"{len(references)} references"
         )
-    # ponytail: lazy import — rouge-score pulls in nltk/absl, avoid at module load
+
+
+def compute_rouge_l(predictions: list[str], references: list[str]) -> float:
+    _validate_inputs(predictions, references)
     from rouge_score import rouge_scorer
 
     scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
-    scores = []
-    for pred, ref in zip(predictions, references):
-        s = scorer.score(ref, pred)
-        scores.append(s["rougeL"].fmeasure)
+    scores = [
+        scorer.score(ref, pred)["rougeL"].fmeasure
+        for pred, ref in zip(predictions, references)
+    ]
     return sum(scores) / len(scores)
 
 
 def compute_bertscore(
     predictions: list[str], references: list[str]
 ) -> tuple[float, float, float]:
-    """Compute mean BERTScore (precision, recall, F1).
-
-    Returns a tuple of three floats in [0.0, 1.0].
-    """
-    if not predictions or not references:
-        raise MetricError("predictions and references must be non-empty")
-    if len(predictions) != len(references):
-        raise MetricError(
-            f"length mismatch: {len(predictions)} predictions vs "
-            f"{len(references)} references"
-        )
-    # ponytail: lazy import — bert-score pulls in torch + transformers
+    _validate_inputs(predictions, references)
     from bert_score import score as bert_score_fn
 
     P, R, F = bert_score_fn(
@@ -69,24 +47,13 @@ def compute_bertscore(
 def compute_semantic_similarity(
     predictions: list[str], references: list[str]
 ) -> float:
-    """Compute mean cosine semantic similarity using sentence-transformers.
-
-    Returns a float in [0.0, 1.0] (cosine similarity rescaled to [0,1]).
-    """
-    if not predictions or not references:
-        raise MetricError("predictions and references must be non-empty")
-    if len(predictions) != len(references):
-        raise MetricError(
-            f"length mismatch: {len(predictions)} predictions vs "
-            f"{len(references)} references"
-        )
-    # ponytail: lazy import — sentence-transformers pulls in torch + transformers
+    _validate_inputs(predictions, references)
     from sentence_transformers import SentenceTransformer, util
 
     model = SentenceTransformer("all-MiniLM-L6-v2")
     pred_emb = model.encode(predictions, convert_to_tensor=True)
     ref_emb = model.encode(references, convert_to_tensor=True)
     cos = util.cos_sim(pred_emb, ref_emb)
-    # diagonal = pairwise similarities; rescale [-1,1] → [0,1]
+    # Rescale [-1,1] → [0,1] along the diagonal (pairwise).
     diag = cos.diagonal()
     return float(((diag + 1.0) / 2.0).mean().item())

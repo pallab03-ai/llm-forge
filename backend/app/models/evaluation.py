@@ -1,15 +1,8 @@
 """Evaluation ORM model.
 
-Represents an evaluation run of a trained LoRA adapter against a dataset
-version. Stores computed metrics (ROUGE-L, BERTScore, semantic similarity)
-and lifecycle timestamps.
-
-Per engineering guardrails:
-- UUID primary keys.
-- created_at / updated_at timestamps.
-- model_id references training_jobs.id (the trained adapter source)
-  until a dedicated model_versions table exists in Phase 6.
-- No soft delete — evaluations are immutable historical records.
+An evaluation runs a trained LoRA adapter against a dataset version and
+stores ROUGE-L, BERTScore, and semantic-similarity metrics. Evaluations
+are immutable — no soft delete.
 """
 
 from __future__ import annotations
@@ -32,8 +25,6 @@ from app.db.base import BaseModel
 
 
 class EvaluationStatus(str, enum.Enum):
-    """Lifecycle status of an evaluation job."""
-
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -41,10 +32,7 @@ class EvaluationStatus(str, enum.Enum):
 
 
 class Evaluation(BaseModel):
-    """An evaluation of a trained adapter against a dataset version.
-
-    Table: `evaluations`
-    """
+    """Table: `evaluations`."""
 
     __tablename__ = "evaluations"
 
@@ -136,7 +124,7 @@ class Evaluation(BaseModel):
         doc="Error details if the evaluation failed.",
     )
 
-    def __repr__(self) -> str:  # pragma: no cover - debug helper
+    def __repr__(self) -> str:  # pragma: no cover
         return (
             f"<Evaluation id={self.id} status={self.status!r} "
             f"model_id={self.model_id!r}>"

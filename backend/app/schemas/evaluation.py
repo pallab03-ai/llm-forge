@@ -1,7 +1,4 @@
-"""Evaluation request / response schemas.
-
-Pydantic v2 models crossing the API boundary for the Evaluation Service.
-"""
+"""Evaluation request / response schemas."""
 
 from __future__ import annotations
 

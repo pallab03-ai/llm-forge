@@ -1,12 +1,4 @@
-"""Training job request / response schemas.
-
-All schemas are Pydantic v2 models. They are the only types allowed to
-cross the API boundary.
-
-Per engineering guardrails:
-- Typed request/response models are mandatory.
-- Response envelope is `{success, data}` or `{success, error}`.
-"""
+"""Training job request / response schemas."""
 
 from __future__ import annotations
 
@@ -17,11 +9,6 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.training_job import TrainingConfig, TrainingJobStatus, TrainingType
-
-
-# ---------------------------------------------------------------------------
-# Requests
-# ---------------------------------------------------------------------------
 
 
 class TrainingJobCreateRequest(BaseModel):
@@ -51,11 +38,6 @@ class TrainingJobCreateRequest(BaseModel):
         ...,
         description="Training hyperparameters (epochs, batch_size, learning_rate, max_seq_length).",
     )
-
-
-# ---------------------------------------------------------------------------
-# Responses
-# ---------------------------------------------------------------------------
 
 
 class TrainingJobResponse(BaseModel):

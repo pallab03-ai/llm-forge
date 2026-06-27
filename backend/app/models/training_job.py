@@ -1,22 +1,12 @@
-"""TrainingJob ORM model and domain types.
+"""TrainingJob ORM model and hyperparameters config.
 
-Represents a fine-tuning training job submitted by a user.
-Each job references a dataset (and specific version) and tracks
-its lifecycle through QUEUED → RUNNING → COMPLETED/FAILED/CANCELLED.
-
-Per engineering guardrails:
-- UUID primary keys.
-- created_at / updated_at timestamps.
-- Soft delete via deleted_at.
-- No CREATED status — jobs start at QUEUED.
-- TrainingConfig is a Pydantic v2 model with exactly 4 fields.
+Jobs start at QUEUED and move through RUNNING → COMPLETED/FAILED/CANCELLED.
 """
 
 from __future__ import annotations
 
 import enum
 from datetime import datetime
-from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel as PydanticBaseModel
@@ -34,17 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import BaseModel
 
 
-# ---------------------------------------------------------------------------
-# Enums
-# ---------------------------------------------------------------------------
-
-
 class TrainingJobStatus(str, enum.Enum):
-    """Lifecycle status of a training job.
-
-    No CREATED status — jobs are enqueued immediately upon creation.
-    """
-
     QUEUED = "queued"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -53,33 +33,18 @@ class TrainingJobStatus(str, enum.Enum):
 
 
 class TrainingType(str, enum.Enum):
-    """Supported fine-tuning strategies."""
-
     SFT = "sft"
     LORA = "lora"
     QLORA = "qlora"
     PEFT = "peft"
 
 
-# ---------------------------------------------------------------------------
-# TrainingConfig (Pydantic v2 — stored as JSONB in the database)
-# ---------------------------------------------------------------------------
-
-
 class TrainingConfig(PydanticBaseModel):
-    """Training hyperparameters — exactly 4 fields.
+    """Training hyperparameters (stored as JSONB).
 
-    Stored as JSONB in the training_jobs.configuration column.
-
-    Limits are calibrated for a 16 GB T4 GPU (Colab free tier):
-    - epochs: 1–10
-    - batch_size: 1–64
-    - learning_rate: 1e-7–1.0
-    - max_seq_length: 64–8192
-
-    Cross-field OOM guard: batch_size * max_seq_length must not exceed
-    262144 (e.g. 64×4096 or 32×8192). This is a conservative heuristic
-    to prevent out-of-memory errors on 16 GB VRAM.
+    Limits are calibrated for a 16 GB T4 GPU (Colab free tier).
+    The OOM guard ``batch_size * max_seq_length ≤ 262144`` is a
+    conservative heuristic for 16 GB VRAM.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -91,10 +56,6 @@ class TrainingConfig(PydanticBaseModel):
 
     @model_validator(mode="after")
     def _validate_oom_risk(self) -> "TrainingConfig":
-        """Reject combinations likely to cause OOM on a 16 GB T4.
-
-        Heuristic: batch_size × max_seq_length ≤ 262144.
-        """
         if self.batch_size * self.max_seq_length > 262144:
             raise ValueError(
                 f"batch_size × max_seq_length ({self.batch_size} × "
@@ -105,16 +66,8 @@ class TrainingConfig(PydanticBaseModel):
         return self
 
 
-# ---------------------------------------------------------------------------
-# TrainingJob
-# ---------------------------------------------------------------------------
-
-
 class TrainingJob(BaseModel):
-    """A fine-tuning training job.
-
-    Table: `training_jobs`
-    """
+    """Table: `training_jobs`."""
 
     __tablename__ = "training_jobs"
 
@@ -204,13 +157,12 @@ class TrainingJob(BaseModel):
         doc="Soft-delete timestamp. NULL means active.",
     )
 
-    # Relationships
     dataset: Mapped["Dataset"] = relationship(  # type: ignore[name-defined]  # noqa: F821
         "Dataset",
         lazy="selectin",
     )
 
-    def __repr__(self) -> str:  # pragma: no cover - debug helper
+    def __repr__(self) -> str:  # pragma: no cover
         return (
             f"<TrainingJob id={self.id} status={self.status!r} "
             f"base_model={self.base_model!r} type={self.training_type!r}>"

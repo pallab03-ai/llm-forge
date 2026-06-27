@@ -1,66 +1,13 @@
-"""Dataset request / response schemas.
-
-All schemas are Pydantic v2 models. They are the only types allowed to
-cross the API boundary.
-
-Per engineering guardrails:
-- Typed request/response models are mandatory.
-- Response envelope is `{success, data}` or `{success, error}`.
-"""
+"""Dataset response schemas (uploads use form fields, not JSON bodies)."""
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.dataset import DatasetFormat, DatasetStatus, DatasetType
-
-
-# ---------------------------------------------------------------------------
-# Requests
-# ---------------------------------------------------------------------------
-
-
-class DatasetCreateRequest(BaseModel):
-    """Payload for `POST /api/v1/datasets` — create a dataset and upload v1."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    name: str = Field(
-        ...,
-        min_length=1,
-        max_length=255,
-        description="Human-readable dataset name.",
-    )
-    description: str | None = Field(
-        default=None,
-        max_length=5000,
-        description="Optional description.",
-    )
-    dataset_type: DatasetType = Field(
-        ...,
-        description="Semantic type: instruction_tuning, chat, or qa.",
-    )
-    format: DatasetFormat = Field(
-        ...,
-        description="File format: csv, json, or jsonl.",
-    )
-
-
-class DatasetVersionUploadRequest(BaseModel):
-    """Payload for `POST /api/v1/datasets/{id}/versions` — upload a new version."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    # No extra fields — the file comes as multipart upload form data.
-
-
-# ---------------------------------------------------------------------------
-# Responses
-# ---------------------------------------------------------------------------
 
 
 class DatasetVersionResponse(BaseModel):

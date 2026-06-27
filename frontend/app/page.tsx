@@ -40,10 +40,7 @@ export default function HomePage() {
         </header>
 
         <section className="rounded-lg border bg-card p-6 shadow-sm">
-          <h2 className="text-xl font-semibold">Phase 0 — Foundation</h2>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Monorepo skeleton is live. Backend health endpoint is wired and reachable from the frontend.
-          </p>
+          <h2 className="text-xl font-semibold">Backend health</h2>
 
           <div className="mt-4 rounded-md bg-muted p-4 text-sm">
             {health ? (
@@ -62,10 +59,6 @@ export default function HomePage() {
             )}
           </div>
         </section>
-
-        <footer className="text-xs text-muted-foreground">
-          Phase 0 deliverable — no business logic yet. See README.md for the implementation roadmap.
-        </footer>
       </div>
     </main>
   );

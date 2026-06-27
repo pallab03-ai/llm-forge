@@ -1,7 +1,4 @@
-"""Model Registry request / response schemas.
-
-Pydantic v2 models crossing the API boundary for the Model Registry.
-"""
+"""Model Registry request / response schemas."""
 
 from __future__ import annotations
 

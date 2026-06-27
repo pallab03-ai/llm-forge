@@ -1,11 +1,6 @@
 """Evaluation API routes.
 
-Endpoints:
-- POST   /evaluations          — Create + run an evaluation.
-- GET    /evaluations          — List evaluations for current user.
-- GET    /evaluations/{id}     — Get an evaluation by ID.
-
-No DELETE endpoint (evaluations are immutable historical records).
+Evaluations are immutable historical records — no DELETE endpoint.
 """
 
 from __future__ import annotations
@@ -30,13 +25,7 @@ from app.services.evaluation_service import EvaluationService
 router = APIRouter(prefix="/evaluations", tags=["evaluations"])
 
 
-# ---------------------------------------------------------------------------
-# Dependency helpers
-# ---------------------------------------------------------------------------
-
-
 def _get_evaluation_service(db: DBSession) -> EvaluationService:
-    """Build an EvaluationService with all its dependencies."""
     return EvaluationService(
         evaluation_repo=EvaluationRepository(db),
         training_job_repo=TrainingJobRepository(db),
@@ -47,11 +36,6 @@ def _get_evaluation_service(db: DBSession) -> EvaluationService:
 EvaluationServiceDep = Annotated[
     EvaluationService, Depends(_get_evaluation_service)
 ]
-
-
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
 
 
 @router.post(
@@ -65,13 +49,7 @@ async def create_evaluation(
     service: EvaluationServiceDep,
     request: EvaluationCreateRequest,
 ) -> SuccessResponse[EvaluationResponse]:
-    """Create a new evaluation and run it synchronously.
-
-    Validates that the trained model (training job) exists, is owned by
-    the current user, and has a completed adapter artifact. Validates
-    dataset ownership. Computes ROUGE-L, BERTScore, and semantic
-    similarity, then persists the results.
-    """
+    """Create and run a new evaluation (ROUGE-L, BERTScore, semantic similarity)."""
     result = await service.create_evaluation(
         user_id=current_user.id,
         request=request,
@@ -96,7 +74,7 @@ async def list_evaluations(
         Query(ge=0, description="Number of items to skip"),
     ] = 0,
 ) -> SuccessResponse[EvaluationListResponse]:
-    """Return a paginated list of evaluations for the current user."""
+    """Return a paginated list of the user's evaluations."""
     result = await service.list_evaluations(
         user_id=current_user.id,
         limit=limit,
@@ -115,7 +93,7 @@ async def get_evaluation(
     service: EvaluationServiceDep,
     evaluation_id: UUID,
 ) -> SuccessResponse[EvaluationResponse]:
-    """Return a single evaluation by ID. Only the owner can view it."""
+    """Return an evaluation by ID (owner only)."""
     result = await service.get_evaluation(
         evaluation_id,
         user_id=current_user.id,

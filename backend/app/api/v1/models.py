@@ -1,14 +1,6 @@
 """Model Registry API routes.
 
-Endpoints:
-- POST  /models                    — Create a model container.
-- GET   /models                    — List models for current user.
-- GET   /models/{id}               — Get a model by ID.
-- POST  /models/{id}/versions      — Register a trained adapter as a version.
-- POST  /models/versions/{id}/promote — Promote a version to PRODUCTION.
-- POST  /models/versions/{id}/archive — Archive a version.
-
-No DELETE endpoints (versions move to ARCHIVED).
+Versions move to ARCHIVED rather than being deleted.
 """
 
 from __future__ import annotations
@@ -35,13 +27,7 @@ from app.services.model_registry_service import ModelRegistryService
 router = APIRouter(prefix="/models", tags=["models"])
 
 
-# ---------------------------------------------------------------------------
-# Dependency helpers
-# ---------------------------------------------------------------------------
-
-
 def _get_model_registry_service(db: DBSession) -> ModelRegistryService:
-    """Build a ModelRegistryService with all its dependencies."""
     return ModelRegistryService(
         model_repo=ModelRepository(db),
         training_job_repo=TrainingJobRepository(db),
@@ -52,11 +38,6 @@ def _get_model_registry_service(db: DBSession) -> ModelRegistryService:
 ModelRegistryServiceDep = Annotated[
     ModelRegistryService, Depends(_get_model_registry_service)
 ]
-
-
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
 
 
 @router.post(
@@ -95,7 +76,7 @@ async def list_models(
         Query(ge=0, description="Number of items to skip"),
     ] = 0,
 ) -> SuccessResponse[ModelListResponse]:
-    """Return a paginated list of models for the current user."""
+    """Return a paginated list of the user's models."""
     result = await service.list_models(
         user_id=current_user.id,
         limit=limit,
@@ -114,7 +95,7 @@ async def get_model(
     service: ModelRegistryServiceDep,
     model_id: UUID,
 ) -> SuccessResponse[ModelResponse]:
-    """Return a single model by ID. Only the owner can view it."""
+    """Return a model by ID (owner only)."""
     result = await service.get_model(
         model_id,
         user_id=current_user.id,
@@ -134,11 +115,7 @@ async def create_version(
     model_id: UUID,
     request: ModelVersionCreateRequest,
 ) -> SuccessResponse[ModelVersionResponse]:
-    """Register a trained adapter as a new version of a model.
-
-    Validates that the training job is completed, has an artifact, and
-    that the evaluation is completed and belongs to the same adapter.
-    """
+    """Register a trained adapter as a new version of a model."""
     result = await service.create_version(
         user_id=current_user.id,
         model_id=model_id,
@@ -157,11 +134,7 @@ async def promote_version(
     service: ModelRegistryServiceDep,
     version_id: UUID,
 ) -> SuccessResponse[ModelVersionResponse]:
-    """Promote a version to PRODUCTION.
-
-    Any existing PRODUCTION version of the same model is automatically
-    demoted to STAGING in the same transaction.
-    """
+    """Promote a version to PRODUCTION (demotes any existing PRODUCTION peer)."""
     result = await service.promote_version(
         version_id,
         user_id=current_user.id,

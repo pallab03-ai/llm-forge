@@ -1,9 +1,6 @@
-"""Model Registry service.
+"""Model Registry service: model/version lifecycle.
 
-Orchestrates model/version lifecycle:
-  create model → create version (register adapter) → promote → archive
-
-Business rules live here. Repositories provide raw data access.
+create model → create version (register adapter) → promote → archive
 """
 
 from __future__ import annotations
@@ -23,11 +20,6 @@ from app.schemas.model import (
     ModelVersionCreateRequest,
     ModelVersionResponse,
 )
-
-
-# ---------------------------------------------------------------------------
-# Domain exceptions
-# ---------------------------------------------------------------------------
 
 
 class ModelRegistryError(Exception):
@@ -181,10 +173,6 @@ class ModelRegistryService:
         self._jobs = training_job_repo
         self._evals = evaluation_repo
 
-    # ------------------------------------------------------------------
-    # Model operations
-    # ------------------------------------------------------------------
-
     async def create_model(
         self,
         *,
@@ -234,10 +222,6 @@ class ModelRegistryService:
             offset=offset,
         )
 
-    # ------------------------------------------------------------------
-    # Version operations (register trained adapter)
-    # ------------------------------------------------------------------
-
     async def create_version(
         self,
         *,
@@ -266,8 +250,7 @@ class ModelRegistryService:
             request.evaluation_id, user_id
         )
 
-        # ponytail: ensure the evaluation was produced from this adapter.
-        # This catches accidental cross-linking of unrelated jobs/evals.
+        # Catch accidental cross-linking of unrelated jobs/evals.
         if evaluation.model_id != job.id:
             raise ModelRegistryError(
                 f"Evaluation {evaluation.id} does not belong to "
@@ -299,7 +282,6 @@ class ModelRegistryService:
     async def _validate_training_job(
         self, job_id: UUID, user_id: UUID
     ) -> TrainingJob:
-        """Fetch and validate a training job for version registration."""
         job = await self._jobs.get_by_id(job_id)
         if job is None or job.user_id != user_id:
             raise TrainingJobNotFoundError(job_id)
@@ -313,7 +295,6 @@ class ModelRegistryService:
     async def _validate_evaluation(
         self, evaluation_id: UUID, user_id: UUID
     ) -> Evaluation:
-        """Fetch and validate an evaluation for version registration."""
         evaluation = await self._evals.get_by_id(evaluation_id)
         if evaluation is None or evaluation.user_id != user_id:
             raise EvaluationNotFoundError(evaluation_id)
@@ -322,7 +303,6 @@ class ModelRegistryService:
         return evaluation
 
     def _build_metrics_snapshot(self, evaluation: Evaluation) -> dict:
-        """Build a serializable metrics snapshot from an evaluation."""
         return {
             "rouge_score": evaluation.rouge_score,
             "bertscore_precision": evaluation.bertscore_precision,
@@ -330,10 +310,6 @@ class ModelRegistryService:
             "bertscore_f1": evaluation.bertscore_f1,
             "semantic_similarity": evaluation.semantic_similarity,
         }
-
-    # ------------------------------------------------------------------
-    # Lifecycle transitions
-    # ------------------------------------------------------------------
 
     async def promote_version(
         self,
@@ -394,7 +370,6 @@ class ModelRegistryService:
     async def _ensure_version_access(
         self, version_id: UUID, user_id: UUID
     ) -> ModelVersion:
-        """Fetch a version and verify the requesting user owns its model."""
         version = await self._models.get_version(version_id)
         if version is None:
             raise ModelVersionNotFoundError(version_id)
@@ -402,13 +377,3 @@ class ModelRegistryService:
         if model is None or model.owner_id != user_id:
             raise ModelVersionAccessDeniedError(version_id)
         return version
-
-    def _set_error_attributes(
-        self, _job_id: UUID, _evaluation_id: UUID
-    ) -> None:
-        """No-op placeholder kept for future cross-check hooks.
-
-        ponytail: this method is intentionally empty. It exists only so
-        the create_version flow has a named location for additional
-        ownership/artifact cross-checks if they become needed.
-        """

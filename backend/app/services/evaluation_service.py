@@ -1,14 +1,8 @@
-"""Evaluation service.
+"""Evaluation service: run an adapter against a dataset and persist metrics.
 
-Orchestrates the evaluation flow:
-  validate request → load adapter → load dataset → generate predictions
-  → compute metrics → persist results → return report
-
-Synchronous and simple (MVP). No async workers, no batch, no distributed.
-
-Heavy ML (transformers/peft) imports are LAZY inside methods so the
-module imports cleanly in test environments. Tests override
-`_generate_predictions` to stub out the model-inference seam.
+Synchronous and simple (MVP). Heavy ML imports are lazy so the module
+loads cleanly in test environments. Tests override
+``_generate_predictions`` to stub out the inference seam.
 """
 
 from __future__ import annotations
@@ -27,26 +21,14 @@ from app.schemas.evaluation import (
     EvaluationResponse,
 )
 from app.services import metrics as metrics_module
-from app.services.metrics import (
-    MetricError,
-)
-
-
-# ---------------------------------------------------------------------------
-# Domain exceptions
-# ---------------------------------------------------------------------------
 
 
 class EvaluationError(Exception):
-    """Base exception for evaluation-related errors."""
-
     code = "EVALUATION_ERROR"
     http_status = 400
 
 
 class EvaluationNotFoundError(EvaluationError):
-    """Raised when an evaluation does not exist."""
-
     code = "EVALUATION_NOT_FOUND"
     http_status = 404
 
@@ -56,8 +38,6 @@ class EvaluationNotFoundError(EvaluationError):
 
 
 class EvaluationAccessDeniedError(EvaluationError):
-    """Raised when a user accesses an evaluation they do not own."""
-
     code = "EVALUATION_ACCESS_DENIED"
     http_status = 403
 
@@ -67,8 +47,6 @@ class EvaluationAccessDeniedError(EvaluationError):
 
 
 class ModelNotFoundError(EvaluationError):
-    """Raised when the referenced trained model (training job) is missing."""
-
     code = "MODEL_NOT_FOUND"
     http_status = 404
 
@@ -78,8 +56,6 @@ class ModelNotFoundError(EvaluationError):
 
 
 class ModelNotReadyError(EvaluationError):
-    """Raised when the referenced training job has no artifact (not completed)."""
-
     code = "MODEL_NOT_READY"
     http_status = 409
 
@@ -92,8 +68,6 @@ class ModelNotReadyError(EvaluationError):
 
 
 class DatasetNotFoundError(EvaluationError):
-    """Raised when the referenced dataset is missing or not owned."""
-
     code = "DATASET_NOT_FOUND"
     http_status = 404
 
@@ -103,8 +77,6 @@ class DatasetNotFoundError(EvaluationError):
 
 
 class DatasetVersionNotFoundError(EvaluationError):
-    """Raised when the referenced dataset version is missing."""
-
     code = "DATASET_VERSION_NOT_FOUND"
     http_status = 404
 
@@ -114,8 +86,6 @@ class DatasetVersionNotFoundError(EvaluationError):
 
 
 class AdapterNotFoundError(EvaluationError):
-    """Raised when the adapter artifact path does not exist on disk."""
-
     code = "ADAPTER_NOT_FOUND"
     http_status = 404
 
@@ -125,8 +95,6 @@ class AdapterNotFoundError(EvaluationError):
 
 
 class MetricComputationError(EvaluationError):
-    """Raised when metric computation fails."""
-
     code = "METRIC_COMPUTATION_FAILED"
     http_status = 422
 
@@ -135,14 +103,7 @@ class MetricComputationError(EvaluationError):
         super().__init__(f"Metric computation failed: {detail}")
 
 
-# ---------------------------------------------------------------------------
-# Service
-# ---------------------------------------------------------------------------
-
-
 class EvaluationService:
-    """Business logic for evaluation management."""
-
     def __init__(
         self,
         evaluation_repo: EvaluationRepository,
@@ -153,54 +114,29 @@ class EvaluationService:
         self._jobs = training_job_repo
         self._datasets = dataset_repo
 
-    # ------------------------------------------------------------------
-    # Create + run evaluation
-    # ------------------------------------------------------------------
-
     async def create_evaluation(
         self,
         *,
         user_id: UUID,
         request: EvaluationCreateRequest,
     ) -> EvaluationResponse:
-        """Create an evaluation and run it synchronously (MVP).
-
-        Flow:
-        1. Validate the trained model (training job) exists, is owned by
-           the user, is completed, and has an artifact_path.
-        2. Validate the dataset + version exist and are owned by the user.
-        3. Create the evaluation row (status=RUNNING).
-        4. Load adapter, load dataset records, generate predictions.
-        5. Compute metrics (ROUGE-L, BERTScore, semantic similarity).
-        6. Persist metrics, set status=COMPLETED.
-        7. Return the evaluation response.
-
-        On any failure after row creation, status is set to FAILED with
-        an error_message.
-        """
-        # 1. Validate model (training job)
         job = await self._jobs.get_by_id(request.model_id)
         if job is None or job.user_id != user_id:
             raise ModelNotFoundError(request.model_id)
         if job.artifact_path is None:
             raise ModelNotReadyError(request.model_id)
 
-        # 2. Validate dataset ownership
         dataset = await self._datasets.get_by_id_and_owner(
             request.dataset_id, user_id
         )
         if dataset is None:
             raise DatasetNotFoundError(request.dataset_id)
-        # Validate dataset version belongs to this dataset
-        version_exists = False
-        for v in dataset.versions:
-            if v.id == request.dataset_version_id:
-                version_exists = True
-                break
+        version_exists = any(
+            v.id == request.dataset_version_id for v in dataset.versions
+        )
         if not version_exists:
             raise DatasetVersionNotFoundError(request.dataset_version_id)
 
-        # 3. Create evaluation row
         evaluation = Evaluation(
             user_id=user_id,
             dataset_id=request.dataset_id,
@@ -212,7 +148,6 @@ class EvaluationService:
         evaluation = await self._evals.create(evaluation)
         await self._evals.commit()
 
-        # 4-6. Run evaluation; on failure mark FAILED
         try:
             metrics = await self._run_evaluation(
                 evaluation_id=evaluation.id,
@@ -222,12 +157,11 @@ class EvaluationService:
         except Exception as exc:
             await self._evals.save_error(evaluation.id, str(exc))
             await self._evals.commit()
-            # Re-raise metric/adapter errors as-is; wrap unknown errors
+            # Re-raise domain errors as-is; wrap unknown errors.
             if isinstance(exc, EvaluationError):
                 raise
             raise MetricComputationError(str(exc)) from exc
 
-        # 6. Persist metrics + mark completed
         await self._evals.save_metrics(evaluation.id, **metrics)
         await self._evals.update_status(
             evaluation.id,
@@ -236,7 +170,6 @@ class EvaluationService:
         )
         await self._evals.commit()
 
-        # 7. Return refreshed response
         refreshed = await self._evals.get_by_id(evaluation.id)
         assert refreshed is not None
         return EvaluationResponse.model_validate(refreshed)
@@ -248,16 +181,9 @@ class EvaluationService:
         artifact_path: str,
         dataset_version_id: UUID,
     ) -> dict[str, float | None]:
-        """Load adapter + dataset, generate predictions, compute metrics.
-
-        Returns a dict with keys: rouge_score, bertscore_precision,
-        bertscore_recall, bertscore_f1, semantic_similarity.
-        """
-        # Validate adapter exists on disk
         if not os.path.isdir(artifact_path):
             raise AdapterNotFoundError(artifact_path)
 
-        # Load dataset records
         records = await self._load_dataset_records(dataset_version_id)
         if not records:
             raise MetricComputationError("dataset version has no records")
@@ -265,10 +191,8 @@ class EvaluationService:
         inputs = [r.get("instruction", "") for r in records]
         references = [r.get("response", "") or r.get("output", "") for r in records]
 
-        # Generate predictions (heavy ML seam — tests override this method)
         predictions = await self._generate_predictions(artifact_path, inputs)
 
-        # Compute metrics
         rouge = metrics_module.compute_rouge_l(predictions, references)
         bp, br, bf = metrics_module.compute_bertscore(predictions, references)
         sem = metrics_module.compute_semantic_similarity(predictions, references)
@@ -284,12 +208,8 @@ class EvaluationService:
     async def _load_dataset_records(
         self, dataset_version_id: UUID
     ) -> list[dict]:
-        """Load records from the dataset version file.
-
-        ponytail: reads the file path from the DatasetVersion row and
-        parses CSV/JSON/JSONL. No streaming, no caching — load all into
-        memory. Fine for MVP dataset sizes (≤10k records).
-        """
+        # Load the file path from the DatasetVersion row, then parse
+        # by extension. No streaming — load all into memory (≤10k records).
         import csv
         import json as json_mod
 
@@ -307,7 +227,7 @@ class EvaluationService:
         if not os.path.exists(file_path):
             raise DatasetNotFoundError(dataset_version_id)
 
-        # ponytail: detect format by extension; dataset.format lives on parent
+        # dataset.format lives on the parent; detect by extension here.
         ext = file_path.rsplit(".", 1)[-1].lower()
         records: list[dict] = []
         if ext == "jsonl":
@@ -319,36 +239,21 @@ class EvaluationService:
         elif ext == "json":
             with open(file_path, encoding="utf-8") as f:
                 data = json_mod.load(f)
-                if isinstance(data, list):
-                    records = data
-                else:
-                    records = [data]
+                records = data if isinstance(data, list) else [data]
         else:  # csv and friends
             with open(file_path, encoding="utf-8", newline="") as f:
-                reader = csv.DictReader(f)
-                records = list(reader)
+                records = list(csv.DictReader(f))
         return records
 
     async def _generate_predictions(
         self, artifact_path: str, inputs: list[str]
     ) -> list[str]:
-        """Load base model + LoRA adapter and generate predictions.
-
-        ponytail: heavy ML imports are lazy. Tests override this method
-        to stub out inference. The real implementation loads the adapter
-        via transformers + peft and runs model.generate() per input.
-
-        The Phase 4.3 notebook saves the tokenizer to a ``tokenizer/``
-        subdirectory inside the adapter dir, so we load it from there.
-        The adapter was trained on a 4-bit NF4 quantized base, so the
-        base model must be loaded with the same BitsAndBytesConfig —
-        loading the base unquantized and then applying the LoRA adapter
-        would produce mismatched weights and garbage predictions.
-        """
+        # Tokenizer lives in adapter_path/tokenizer/ (QLoRA training layout).
+        # 4-bit NF4 quantization must match the training-time config or
+        # the LoRA weights decode against the wrong base.
         from app.models.training_job import TrainingJob  # noqa: F401
         from sqlalchemy import select
 
-        # Resolve the training job to get the base_model identifier
         result = await self._evals.session.execute(
             select(TrainingJob).where(TrainingJob.artifact_path == artifact_path)
         )
@@ -356,7 +261,6 @@ class EvaluationService:
         if job is None:
             raise AdapterNotFoundError(artifact_path)
 
-        # Lazy heavy imports
         import torch
         from transformers import (
             AutoModelForCausalLM,
@@ -365,15 +269,12 @@ class EvaluationService:
         )
         from peft import PeftModel
 
-        # Tokenizer lives in adapter_path/tokenizer/ (Phase 4.3 layout)
         tokenizer_path = os.path.join(artifact_path, "tokenizer")
         if os.path.isdir(tokenizer_path):
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
         else:
             tokenizer = AutoTokenizer.from_pretrained(artifact_path)
 
-        # Load base model with the SAME 4-bit NF4 quantization used in
-        # Phase 4.3 training. T4 has no bfloat16, so compute dtype is fp16.
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
@@ -400,21 +301,16 @@ class EvaluationService:
                     max_new_tokens=128,
                     do_sample=False,
                 )
-            # Decode only the newly generated tokens, not the input prompt
+            # Decode only the newly generated tokens, not the prompt.
             pred = tokenizer.decode(
                 out[0][input_len:], skip_special_tokens=True
             )
             predictions.append(pred)
         return predictions
 
-    # ------------------------------------------------------------------
-    # Queries
-    # ------------------------------------------------------------------
-
     async def get_evaluation(
         self, evaluation_id: UUID, *, user_id: UUID
     ) -> EvaluationResponse:
-        """Return a single evaluation. Raises access denied if not owner."""
         ev = await self._evals.get_by_id(evaluation_id)
         if ev is None:
             raise EvaluationNotFoundError(evaluation_id)
@@ -429,7 +325,6 @@ class EvaluationService:
         limit: int = 100,
         offset: int = 0,
     ) -> EvaluationListResponse:
-        """Return paginated evaluations for a user."""
         items = await self._evals.list_for_user(
             user_id, limit=limit, offset=offset
         )

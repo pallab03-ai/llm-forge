@@ -1,14 +1,4 @@
-"""Security utilities: password hashing and JWT token management.
-
-Uses:
-- bcrypt (via passlib) for password hashing.
-- python-jose for JWT encoding/decoding.
-
-Per engineering guardrails:
-- Passwords MUST be hashed with bcrypt (never stored in plain text).
-- JWT tokens MUST expire (default: 24 hours).
-- JWT MUST be signed with a strong secret loaded from configuration.
-"""
+"""Password hashing (bcrypt via passlib) and JWT token management."""
 
 from __future__ import annotations
 
@@ -22,12 +12,7 @@ from passlib.context import CryptContext
 from app.core.config import settings
 
 
-# ---------------------------------------------------------------------------
-# Password hashing
-# ---------------------------------------------------------------------------
-
-# bcrypt is the only supported algorithm. `deprecated="auto"` allows future
-# migration to a stronger scheme without breaking existing hashes.
+# bcrypt-only; `deprecated="auto"` lets future schemes coexist.
 _pwd_context = CryptContext(
     schemes=["bcrypt"],
     deprecated="auto",
@@ -36,12 +21,10 @@ _pwd_context = CryptContext(
 
 
 def hash_password(plain_password: str) -> str:
-    """Hash a plain-text password using bcrypt."""
     return _pwd_context.hash(plain_password)
 
 
 def verify_password(plain_password: str, password_hash: str) -> bool:
-    """Verify a plain-text password against a stored bcrypt hash."""
     if not plain_password or not password_hash:
         return False
     try:
@@ -49,11 +32,6 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
     except (ValueError, TypeError):
         # Malformed hash or unsupported scheme.
         return False
-
-
-# ---------------------------------------------------------------------------
-# JWT
-# ---------------------------------------------------------------------------
 
 
 class TokenError(Exception):
@@ -90,7 +68,6 @@ def create_access_token(
     role: str | None = None,
     expires_delta: timedelta | None = None,
 ) -> str:
-    """Create a signed JWT access token for the given user."""
     extra: dict[str, Any] = {}
     if role is not None:
         extra["role"] = role
@@ -103,12 +80,6 @@ def create_access_token(
 
 
 def decode_access_token(token: str) -> dict[str, Any]:
-    """Decode and validate a JWT access token.
-
-    Raises:
-        TokenError: if the token is invalid, expired, or has the wrong
-            issuer / audience.
-    """
     try:
         payload = jwt.decode(
             token,

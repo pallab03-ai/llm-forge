@@ -1,22 +1,8 @@
 """Dataset API routes.
 
-Endpoints:
-- POST   /datasets              — Upload a new dataset (v1).
-- GET    /datasets              — List datasets.
-- GET    /datasets/{id}         — Get dataset detail with versions.
-- POST   /datasets/{id}/versions — Upload a new version.
-- GET    /datasets/{id}/versions — List versions.
-- GET    /datasets/{id}/statistics — Aggregated statistics.
-- DELETE /datasets/{id}         — Soft-delete a dataset.
-
-Phase 2.1 security:
-- All endpoints enforce ownership at the service layer. Non-owners
-  receive 403 (DatasetAccessDeniedError).
-- Upload endpoints reject files larger than
-  ``settings.DATASET_MAX_FILE_SIZE_BYTES`` BEFORE reading the file
-  into memory, using ``UploadFile.size`` (which Starlette populates
-  from the Content-Length header). This prevents OOM on oversized
-  uploads.
+Upload endpoints reject oversized payloads BEFORE reading them into
+memory, using ``UploadFile.size`` (populated by Starlette from the
+Content-Length header). Ownership is enforced at the service layer.
 """
 
 from __future__ import annotations
@@ -38,42 +24,27 @@ from fastapi import (
 from app.api.deps import CurrentUser, DBSession
 from app.core.config import settings
 from app.models.dataset import DatasetFormat, DatasetType
-from app.models.user import User
 from app.repositories.dataset_repository import (
     DatasetRepository,
     DatasetVersionRepository,
 )
-from app.schemas.common import ErrorDetail, ErrorResponse, SuccessResponse
+from app.schemas.common import SuccessResponse
 from app.schemas.dataset import (
     DatasetDetailResponse,
     DatasetListResponse,
     DatasetStatisticsResponse,
     DatasetVersionResponse,
 )
-from app.services.dataset_service import (
-    DatasetAccessDeniedError,
-    DatasetError,
-    DatasetNameExistsError,
-    DatasetNotFoundError,
-    DatasetService,
-    DatasetValidationError,
-    DatasetVersionNotFoundError,
-)
+from app.services.dataset_service import DatasetService
 from app.services.storage_service import LocalStorageService
 from app.services.validation_service import ValidationService
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
 
-# ---------------------------------------------------------------------------
-# Dependency helpers
-# ---------------------------------------------------------------------------
-
-
 def _get_dataset_service(
     db: DBSession,
 ) -> DatasetService:
-    """Build a DatasetService with all its dependencies."""
     return DatasetService(
         dataset_repo=DatasetRepository(db),
         version_repo=DatasetVersionRepository(db),
@@ -85,105 +56,13 @@ def _get_dataset_service(
 DatasetServiceDep = Annotated[DatasetService, Depends(_get_dataset_service)]
 
 
-# ---------------------------------------------------------------------------
-# Exception handlers (registered in main.py)
-# ---------------------------------------------------------------------------
-
-
-async def dataset_error_handler(
-    request, exc: DatasetError
-) -> ErrorResponse:
-    """Map DatasetError → 400."""
-    return ErrorResponse(
-        success=False,
-        error=ErrorDetail(
-            code="DATASET_ERROR",
-            message=str(exc),
-        ),
-    )
-
-
-async def dataset_not_found_handler(
-    request, exc: DatasetNotFoundError
-) -> ErrorResponse:
-    """Map DatasetNotFoundError → 404."""
-    return ErrorResponse(
-        success=False,
-        error=ErrorDetail(
-            code="DATASET_NOT_FOUND",
-            message=str(exc),
-        ),
-    )
-
-
-async def dataset_name_exists_handler(
-    request, exc: DatasetNameExistsError
-) -> ErrorResponse:
-    """Map DatasetNameExistsError → 409."""
-    return ErrorResponse(
-        success=False,
-        error=ErrorDetail(
-            code="DATASET_NAME_EXISTS",
-            message=str(exc),
-        ),
-    )
-
-
-async def dataset_validation_error_handler(
-    request, exc: DatasetValidationError
-) -> ErrorResponse:
-    """Map DatasetValidationError → 422."""
-    return ErrorResponse(
-        success=False,
-        error=ErrorDetail(
-            code="DATASET_VALIDATION_FAILED",
-            message=str(exc),
-        ),
-    )
-
-
-async def dataset_access_denied_handler(
-    request, exc: DatasetAccessDeniedError
-) -> ErrorResponse:
-    """Map DatasetAccessDeniedError → 403.
-
-    Phase 2.1: We deliberately do NOT distinguish between "dataset does
-    not exist" and "dataset exists but you don't own it" in the
-    response body — both surface as 403 to avoid leaking the existence
-    of other users' datasets.
-    """
-    return ErrorResponse(
-        success=False,
-        error=ErrorDetail(
-            code="DATASET_ACCESS_DENIED",
-            message="You do not have access to this dataset.",
-        ),
-    )
-
-
-# ---------------------------------------------------------------------------
-# Upload helpers
-# ---------------------------------------------------------------------------
-
-
 def _reject_if_too_large(file: UploadFile) -> None:
-    """Reject an upload BEFORE reading it into memory.
-
-    Phase 2.1: ``UploadFile.size`` is populated by Starlette from the
-    Content-Length header when the client sends it. We use it as a
-    cheap pre-check so we never ``await file.read()`` a multi-GB
-    payload into process memory.
-
-    If the client omits Content-Length (chunked transfer), ``size`` is
-    ``None`` and we fall through to the service-layer check after
-    reading. The service-layer check is the authoritative one; this
-    pre-check is purely an OOM guard.
-    """
+    # OOM guard: Starlette populates ``file.size`` from Content-Length
+    # when the client sends it. If the client uses chunked transfer
+    # the size is None and we fall through to the service-layer check
+    # after reading.
     max_bytes = settings.DATASET_MAX_FILE_SIZE_BYTES
     if file.size is not None and file.size > max_bytes:
-        # Raise a plain HTTPException with a structured detail payload
-        # so the global error envelope is consistent with the rest of
-        # the API. FastAPI will serialize ``detail`` as JSON.
         raise HTTPException(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail={
@@ -236,11 +115,7 @@ async def upload_dataset(
     """Upload a dataset file and create version 1.
 
     The file is validated for schema correctness, duplicates (within-file),
-    and size/record limits. On success the dataset status is `ready`;
-    on validation failure it is `failed`.
-
-    Phase 2.1: oversized files are rejected with 413 BEFORE being read
-    into memory. The dataset is owned by ``current_user.id``.
+    and size/record limits. The dataset is owned by ``current_user.id``.
     """
     _reject_if_too_large(file)
     content = await file.read()
@@ -276,10 +151,7 @@ async def list_datasets(
         Query(ge=0, description="Number of items to skip"),
     ] = 0,
 ) -> SuccessResponse[DatasetListResponse]:
-    """Return a paginated list of active (non-deleted) datasets.
-
-    Phase 2.1: only datasets owned by the current user are returned.
-    """
+    """Return a paginated list of active (non-deleted) datasets owned by the user."""
     result = await service.list_datasets(
         current_user_id=current_user.id,
         limit=limit,
@@ -299,10 +171,7 @@ async def get_dataset(
     service: DatasetServiceDep,
     dataset_id: UUID,
 ) -> SuccessResponse[DatasetDetailResponse]:
-    """Return a dataset with all its versions.
-
-    Phase 2.1: only the owner can read a dataset. Non-owners get 403.
-    """
+    """Return a dataset with all its versions (owner only)."""
     result = await service.get_dataset(
         dataset_id, current_user_id=current_user.id
     )
@@ -325,14 +194,7 @@ async def upload_dataset_version(
         File(description="Dataset file for the new version"),
     ],
 ) -> SuccessResponse[DatasetDetailResponse]:
-    """Upload a new version of an existing dataset.
-
-    The version number is auto-incremented. The file is validated
-    against the dataset's type and format.
-
-    Phase 2.1: oversized files are rejected with 413 BEFORE being read
-    into memory. Only the dataset owner can upload a new version.
-    """
+    """Upload a new version of an existing dataset (owner only)."""
     _reject_if_too_large(file)
     content = await file.read()
     filename = file.filename or "dataset"
@@ -357,10 +219,7 @@ async def list_dataset_versions(
     service: DatasetServiceDep,
     dataset_id: UUID,
 ) -> SuccessResponse[list[DatasetVersionResponse]]:
-    """Return all versions for a dataset, newest first.
-
-    Phase 2.1: only the owner can list versions.
-    """
+    """Return all versions for a dataset, newest first (owner only)."""
     result = await service.get_versions(
         dataset_id, current_user_id=current_user.id
     )
@@ -378,10 +237,7 @@ async def get_dataset_statistics(
     service: DatasetServiceDep,
     dataset_id: UUID,
 ) -> SuccessResponse[DatasetStatisticsResponse]:
-    """Return aggregated statistics across all versions.
-
-    Phase 2.1: only the owner can read statistics.
-    """
+    """Return aggregated statistics across all versions (owner only)."""
     result = await service.get_statistics(
         dataset_id, current_user_id=current_user.id
     )
@@ -399,10 +255,7 @@ async def delete_dataset(
     service: DatasetServiceDep,
     dataset_id: UUID,
 ) -> SuccessResponse[None]:
-    """Soft-delete a dataset (sets deleted_at, status=deleted).
-
-    Phase 2.1: only the owner can delete.
-    """
+    """Soft-delete a dataset (owner only)."""
     await service.soft_delete(
         dataset_id, current_user_id=current_user.id
     )

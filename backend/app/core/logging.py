@@ -1,11 +1,7 @@
-"""Structured logging configuration.
-
-Provides JSON-formatted logs for production observability.
-"""
+"""Structured (JSON) logging configuration for production observability."""
 
 import logging
 import sys
-from typing import Any, Dict
 
 import structlog
 
@@ -13,7 +9,6 @@ from app.core.config import settings
 
 
 def setup_logging() -> None:
-    """Configure structured logging for the application."""
     logging.basicConfig(
         format="%(message)s",
         stream=sys.stdout,
@@ -36,8 +31,3 @@ def setup_logging() -> None:
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,
     )
-
-
-def get_logger(name: str) -> Any:
-    """Return a structured logger instance."""
-    return structlog.get_logger(name)

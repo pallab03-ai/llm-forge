@@ -1,17 +1,11 @@
-"""Dataset validation service.
+"""Dataset validation: schema, duplicate detection, basic stats.
 
-Validates uploaded dataset files for schema correctness, duplicate
-detection (within-file only), missing data, and length constraints.
-
-Per approved revision:
-- Duplicate detection is performed ONLY inside the uploaded file
-  (not cross-file).
+Duplicate detection is within-file only.
 """
 
 from __future__ import annotations
 
 import csv
-import io
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,15 +13,8 @@ from pathlib import Path
 from app.models.dataset import DatasetFormat, DatasetType
 
 
-# ---------------------------------------------------------------------------
-# Validation result
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class ValidationResult:
-    """Result of validating a dataset file."""
-
     is_valid: bool = True
     record_count: int = 0
     duplicate_count: int = 0
@@ -39,23 +26,11 @@ class ValidationResult:
         self.errors.append(error)
 
 
-# ---------------------------------------------------------------------------
-# Limits
-# ---------------------------------------------------------------------------
-
 MAX_FILE_SIZE_BYTES = 1_073_741_824  # 1 GB
 MAX_RECORDS = 10_000_000  # 10 million
 
 
-# ---------------------------------------------------------------------------
-# Validator
-# ---------------------------------------------------------------------------
-
-
 class ValidationService:
-    """Validates dataset files against format and type requirements."""
-
-    # Required columns per dataset type
     _REQUIRED_COLUMNS: dict[DatasetType, set[str]] = {
         DatasetType.INSTRUCTION_TUNING: {"instruction", "response"},
         DatasetType.CHAT: {"messages"},
@@ -68,10 +43,8 @@ class ValidationService:
         format: DatasetFormat,
         dataset_type: DatasetType,
     ) -> ValidationResult:
-        """Validate a dataset file and return a ValidationResult."""
         result = ValidationResult()
 
-        # Check file exists and size
         if not file_path.exists():
             result.add_error(f"File not found: {file_path}")
             return result
@@ -88,7 +61,6 @@ class ValidationService:
             result.add_error("File is empty.")
             return result
 
-        # Dispatch to format-specific parser
         try:
             if format == DatasetFormat.CSV:
                 records = self._parse_csv(file_path)
@@ -116,28 +88,18 @@ class ValidationService:
 
         result.record_count = len(records)
 
-        # Validate schema (required columns)
         required = self._REQUIRED_COLUMNS.get(dataset_type, set())
         if required:
             schema_errors = self._validate_schema(records, required)
             result.errors.extend(schema_errors)
 
-        # Detect duplicates within file only
         result.duplicate_count = self._count_duplicates(records)
-
-        # Compute statistics
         result.statistics = self._compute_statistics(records, dataset_type)
 
-        # Final validity
         result.is_valid = len(result.errors) == 0
         return result
 
-    # ------------------------------------------------------------------
-    # Parsers
-    # ------------------------------------------------------------------
-
     def _parse_csv(self, file_path: Path) -> list[dict]:
-        """Parse a CSV file into a list of dicts."""
         records: list[dict] = []
         with file_path.open("r", encoding="utf-8-sig", newline="") as fh:
             reader = csv.DictReader(fh)
@@ -146,7 +108,6 @@ class ValidationService:
         return records
 
     def _parse_json(self, file_path: Path) -> list[dict]:
-        """Parse a JSON file (array of objects) into a list of dicts."""
         with file_path.open("r", encoding="utf-8") as fh:
             data = json.load(fh)
         if not isinstance(data, list):
@@ -154,7 +115,6 @@ class ValidationService:
         return data
 
     def _parse_jsonl(self, file_path: Path) -> list[dict]:
-        """Parse a JSONL file (one JSON object per line)."""
         records: list[dict] = []
         with file_path.open("r", encoding="utf-8") as fh:
             for line_no, line in enumerate(fh, start=1):
@@ -169,14 +129,9 @@ class ValidationService:
                     ) from exc
         return records
 
-    # ------------------------------------------------------------------
-    # Schema validation
-    # ------------------------------------------------------------------
-
     def _validate_schema(
         self, records: list[dict], required_columns: set[str]
     ) -> list[str]:
-        """Check that every record has the required columns."""
         errors: list[str] = []
         for idx, record in enumerate(records):
             missing = required_columns - set(record.keys())
@@ -187,20 +142,11 @@ class ValidationService:
                 )
         return errors
 
-    # ------------------------------------------------------------------
-    # Duplicate detection (within-file only)
-    # ------------------------------------------------------------------
-
     def _count_duplicates(self, records: list[dict]) -> int:
-        """Count duplicate records within the file.
-
-        A record is considered a duplicate if its JSON-serialized
-        representation matches another record in the same file.
-        """
         seen: set[str] = set()
         duplicates = 0
         for record in records:
-            # Use sorted JSON for stable hashing
+            # Sorted JSON for stable hashing.
             key = json.dumps(record, sort_keys=True, ensure_ascii=False)
             if key in seen:
                 duplicates += 1
@@ -208,14 +154,9 @@ class ValidationService:
                 seen.add(key)
         return duplicates
 
-    # ------------------------------------------------------------------
-    # Statistics
-    # ------------------------------------------------------------------
-
     def _compute_statistics(
         self, records: list[dict], dataset_type: DatasetType
     ) -> dict:
-        """Compute basic statistics about the dataset."""
         stats: dict = {
             "total_records": len(records),
         }
@@ -242,7 +183,6 @@ class ValidationService:
     def _avg_field_length(
         self, records: list[dict], field: str
     ) -> float:
-        """Average string length of a field across records."""
         lengths = [
             len(str(record.get(field, ""))) for record in records
         ]
@@ -251,7 +191,6 @@ class ValidationService:
         return round(sum(lengths) / len(lengths), 2)
 
     def _avg_messages_count(self, records: list[dict]) -> float:
-        """Average number of messages per record (chat type)."""
         counts = []
         for record in records:
             messages = record.get("messages", [])

@@ -1,9 +1,4 @@
-"""Dataset repository.
-
-Encapsulates all database access for the `Dataset` and `DatasetVersion`
-entities. The service layer MUST go through this repository rather than
-touching the session directly.
-"""
+"""Dataset and DatasetVersion repository."""
 
 from __future__ import annotations
 
@@ -18,13 +13,10 @@ from app.repositories.base import BaseRepository
 
 
 class DatasetRepository(BaseRepository[Dataset]):
-    """Async repository for `Dataset`."""
-
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session=session, model=Dataset)
 
     async def get_by_name(self, name: str) -> Dataset | None:
-        """Fetch a dataset by its name (case-insensitive)."""
         normalized = name.strip().lower()
         result = await self._session.execute(
             select(Dataset).where(
@@ -35,7 +27,6 @@ class DatasetRepository(BaseRepository[Dataset]):
         return result.scalar_one_or_none()
 
     async def name_exists(self, name: str) -> bool:
-        """Return True if a dataset with this name already exists."""
         return (await self.get_by_name(name)) is not None
 
     async def list_active(
@@ -45,12 +36,6 @@ class DatasetRepository(BaseRepository[Dataset]):
         limit: int = 100,
         offset: int = 0,
     ) -> list[Dataset]:
-        """Return non-deleted datasets with pagination.
-
-        Phase 2.1: When ``owner_id`` is provided, results are filtered
-        to datasets owned by that user. Passing ``None`` returns all
-        active datasets (admin / system use only).
-        """
         stmt = select(Dataset).where(Dataset.deleted_at.is_(None))
         if owner_id is not None:
             stmt = stmt.where(Dataset.created_by == owner_id)
@@ -60,11 +45,6 @@ class DatasetRepository(BaseRepository[Dataset]):
         return list(result.scalars().all())
 
     async def count_active(self, *, owner_id: UUID | None = None) -> int:
-        """Return the total number of non-deleted datasets.
-
-        Phase 2.1: When ``owner_id`` is provided, count is restricted to
-        datasets owned by that user.
-        """
         stmt = select(func.count(Dataset.id)).where(
             Dataset.deleted_at.is_(None)
         )
@@ -76,13 +56,9 @@ class DatasetRepository(BaseRepository[Dataset]):
     async def get_by_id_and_owner(
         self, dataset_id: UUID, owner_id: UUID
     ) -> Dataset | None:
-        """Fetch a dataset by id, restricted to a specific owner.
-
-        Phase 2.1: Returns ``None`` if the dataset does not exist OR if
-        it exists but is owned by a different user. Callers MUST treat
-        ``None`` as "not found OR not accessible" and surface a 403/404
-        accordingly.
-        """
+        # Returns None when the dataset does not exist OR is owned by a
+        # different user; callers surface this as 403/404 without
+        # leaking which case it was.
         result = await self._session.execute(
             select(Dataset)
             .where(
@@ -97,13 +73,6 @@ class DatasetRepository(BaseRepository[Dataset]):
     async def soft_delete(
         self, dataset_id: UUID, *, owner_id: UUID | None = None
     ) -> bool:
-        """Soft-delete a dataset by setting deleted_at.
-
-        Phase 2.1: When ``owner_id`` is provided, the soft-delete is
-        restricted to datasets owned by that user. Returns ``False`` if
-        the dataset does not exist, is already deleted, or is owned by
-        a different user.
-        """
         if owner_id is not None:
             dataset = await self.get_by_id_and_owner(dataset_id, owner_id)
         else:
@@ -119,13 +88,10 @@ class DatasetRepository(BaseRepository[Dataset]):
 
 
 class DatasetVersionRepository(BaseRepository[DatasetVersion]):
-    """Async repository for `DatasetVersion`."""
-
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session=session, model=DatasetVersion)
 
     async def get_latest_version_number(self, dataset_id: UUID) -> int:
-        """Return the highest version_number for a dataset, or 0 if none."""
         result = await self._session.execute(
             select(func.coalesce(func.max(DatasetVersion.version_number), 0))
             .where(DatasetVersion.dataset_id == dataset_id)
@@ -135,7 +101,6 @@ class DatasetVersionRepository(BaseRepository[DatasetVersion]):
     async def list_by_dataset(
         self, dataset_id: UUID
     ) -> list[DatasetVersion]:
-        """Return all versions for a dataset, newest first."""
         result = await self._session.execute(
             select(DatasetVersion)
             .where(DatasetVersion.dataset_id == dataset_id)
@@ -146,7 +111,6 @@ class DatasetVersionRepository(BaseRepository[DatasetVersion]):
     async def get_by_dataset_and_version(
         self, dataset_id: UUID, version_number: int
     ) -> DatasetVersion | None:
-        """Fetch a specific version of a dataset."""
         result = await self._session.execute(
             select(DatasetVersion).where(
                 DatasetVersion.dataset_id == dataset_id,

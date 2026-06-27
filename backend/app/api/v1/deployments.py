@@ -1,14 +1,4 @@
-"""Deployment API routes.
-
-Endpoints:
-- POST /deployments                    — Create a deployment.
-- GET  /deployments                    — List deployments for current user.
-- GET  /deployments/{id}               — Get a deployment by ID.
-- POST /deployments/{id}/activate      — Load adapter and activate.
-- POST /deployments/{id}/generate      — Run inference.
-
-No DELETE endpoints.
-"""
+"""Deployment API routes."""
 
 from __future__ import annotations
 
@@ -34,18 +24,12 @@ from app.services.inference_service import InferenceService
 
 router = APIRouter(prefix="/deployments", tags=["deployments"])
 
-# ponytail: module-level singleton so the loaded model is reused across
-# requests. Tests can monkeypatch this instance or override the dependency.
+# Module-level singleton so the loaded model is reused across requests.
+# Tests can monkeypatch this instance or override the dependency.
 _inference_service = InferenceService()
 
 
-# ---------------------------------------------------------------------------
-# Dependency helpers
-# ---------------------------------------------------------------------------
-
-
 def _get_deployment_service(db: DBSession) -> DeploymentService:
-    """Build a DeploymentService with request-scoped repos and shared inference."""
     return DeploymentService(
         deployment_repo=DeploymentRepository(db),
         model_repo=ModelRepository(db),
@@ -57,11 +41,6 @@ def _get_deployment_service(db: DBSession) -> DeploymentService:
 DeploymentServiceDep = Annotated[
     DeploymentService, Depends(_get_deployment_service)
 ]
-
-
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
 
 
 @router.post(
@@ -100,7 +79,7 @@ async def list_deployments(
         Query(ge=0, description="Number of items to skip"),
     ] = 0,
 ) -> SuccessResponse[DeploymentListResponse]:
-    """Return a paginated list of deployments for the current user."""
+    """Return a paginated list of the user's deployments."""
     result = await service.list_deployments(
         user_id=current_user.id,
         limit=limit,
@@ -119,7 +98,7 @@ async def get_deployment(
     service: DeploymentServiceDep,
     deployment_id: UUID,
 ) -> SuccessResponse[DeploymentResponse]:
-    """Return a single deployment by ID. Only the owner can view it."""
+    """Return a deployment by ID (owner only)."""
     result = await service.get_deployment(
         deployment_id,
         user_id=current_user.id,

@@ -1,9 +1,6 @@
-"""Deployment service.
+"""Deployment lifecycle: create → activate → generate.
 
-Orchestrates the deployment lifecycle:
-  create deployment → validate ModelVersion → activate → load adapter → ACTIVE
-
-Business rules live here. Repositories provide raw data access.
+create deployment → validate ModelVersion → activate → load adapter → ACTIVE
 """
 
 from __future__ import annotations
@@ -26,21 +23,12 @@ from app.schemas.deployment import (
 from app.services.inference_service import InferenceError, InferenceService
 
 
-# ---------------------------------------------------------------------------
-# Domain exceptions
-# ---------------------------------------------------------------------------
-
-
 class DeploymentError(Exception):
-    """Base exception for deployment-related errors."""
-
     code = "DEPLOYMENT_ERROR"
     http_status = 400
 
 
 class DeploymentNotFoundError(DeploymentError):
-    """Raised when a deployment does not exist."""
-
     code = "DEPLOYMENT_NOT_FOUND"
     http_status = 404
 
@@ -50,8 +38,6 @@ class DeploymentNotFoundError(DeploymentError):
 
 
 class DeploymentAccessDeniedError(DeploymentError):
-    """Raised when a user accesses a deployment they do not own."""
-
     code = "DEPLOYMENT_ACCESS_DENIED"
     http_status = 403
 
@@ -61,8 +47,6 @@ class DeploymentAccessDeniedError(DeploymentError):
 
 
 class DeploymentAlreadyActiveError(DeploymentError):
-    """Raised when an active deployment already exists for the version."""
-
     code = "DEPLOYMENT_ALREADY_ACTIVE"
     http_status = 409
 
@@ -75,8 +59,6 @@ class DeploymentAlreadyActiveError(DeploymentError):
 
 
 class DeploymentModelVersionNotFoundError(DeploymentError):
-    """Raised when the referenced model version does not exist or is not owned."""
-
     code = "MODEL_VERSION_NOT_FOUND"
     http_status = 404
 
@@ -86,8 +68,6 @@ class DeploymentModelVersionNotFoundError(DeploymentError):
 
 
 class DeploymentModelVersionArchivedError(DeploymentError):
-    """Raised when the referenced model version is archived."""
-
     code = "MODEL_VERSION_ARCHIVED"
     http_status = 409
 
@@ -97,8 +77,6 @@ class DeploymentModelVersionArchivedError(DeploymentError):
 
 
 class DeploymentAdapterNotFoundError(DeploymentError):
-    """Raised when the adapter artifact is missing on disk."""
-
     code = "ADAPTER_NOT_FOUND"
     http_status = 404
 
@@ -108,8 +86,6 @@ class DeploymentAdapterNotFoundError(DeploymentError):
 
 
 class DeploymentNotActiveError(DeploymentError):
-    """Raised when inference is requested on a non-ACTIVE deployment."""
-
     code = "DEPLOYMENT_NOT_ACTIVE"
     http_status = 409
 
@@ -119,8 +95,6 @@ class DeploymentNotActiveError(DeploymentError):
 
 
 class DeploymentInvalidStatusError(DeploymentError):
-    """Raised when a deployment cannot transition from its current status."""
-
     code = "INVALID_DEPLOYMENT_STATUS"
     http_status = 409
 
@@ -131,14 +105,7 @@ class DeploymentInvalidStatusError(DeploymentError):
         )
 
 
-# ---------------------------------------------------------------------------
-# Service
-# ---------------------------------------------------------------------------
-
-
 class DeploymentService:
-    """Business logic for managing deployments and inference."""
-
     def __init__(
         self,
         deployment_repo: DeploymentRepository,
@@ -151,23 +118,12 @@ class DeploymentService:
         self._jobs = training_job_repo
         self._inference = inference_service
 
-    # ------------------------------------------------------------------
-    # Create + query
-    # ------------------------------------------------------------------
-
     async def create_deployment(
         self,
         *,
         user_id: UUID,
         request: DeploymentCreateRequest,
     ) -> DeploymentResponse:
-        """Create a new deployment for a ModelVersion.
-
-        Validates:
-        - version exists and is owned by the user
-        - version is not archived
-        - no active deployment already exists for this version
-        """
         version = await self._models.get_version(request.model_version_id)
         await self._ensure_version_owned(
             version, request.model_version_id, user_id
@@ -200,7 +156,6 @@ class DeploymentService:
         *,
         user_id: UUID,
     ) -> DeploymentResponse:
-        """Return a deployment if owned by the user."""
         deployment = await self._ensure_deployment_access(deployment_id, user_id)
         return DeploymentResponse.model_validate(deployment)
 
@@ -211,7 +166,6 @@ class DeploymentService:
         limit: int = 100,
         offset: int = 0,
     ) -> DeploymentListResponse:
-        """Return paginated deployments for a user."""
         items = await self._deployments.list_deployments(
             owner_id=user_id, limit=limit, offset=offset
         )
@@ -223,25 +177,12 @@ class DeploymentService:
             offset=offset,
         )
 
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
-
     async def activate_deployment(
         self,
         deployment_id: UUID,
         *,
         user_id: UUID,
     ) -> DeploymentResponse:
-        """Activate a deployment by loading its adapter into the inference engine.
-
-        Flow:
-        1. Validate deployment is PENDING or FAILED.
-        2. Validate the model version is still deployable.
-        3. Validate the adapter exists on disk.
-        4. Set DEPLOYING, load the model, then set ACTIVE.
-        5. On load failure, set FAILED and raise.
-        """
         import os
 
         deployment = await self._ensure_deployment_access(deployment_id, user_id)
@@ -291,10 +232,6 @@ class DeploymentService:
         await self._deployments.commit()
         return DeploymentResponse.model_validate(deployment)
 
-    # ------------------------------------------------------------------
-    # Inference
-    # ------------------------------------------------------------------
-
     async def generate(
         self,
         deployment_id: UUID,
@@ -302,7 +239,6 @@ class DeploymentService:
         user_id: UUID,
         request: GenerateRequest,
     ) -> GenerateResponse:
-        """Run inference against an ACTIVE deployment."""
         deployment = await self._ensure_deployment_access(deployment_id, user_id)
 
         if deployment.status != DeploymentStatus.ACTIVE:
@@ -313,8 +249,8 @@ class DeploymentService:
         artifact_path = self._resolve_artifact_path(version, job)
         base_model = job.base_model if job is not None else ""
 
-        # ponytail: lazily (re)load if the process restarted or the cache
-        # was cleared. Activation already loads, so this is a safety net.
+        # Safety net: re-load if the process restarted or the cache
+        # was cleared. Activation normally loads it once.
         self._inference.load(artifact_path, base_model)
 
         try:
@@ -324,14 +260,9 @@ class DeploymentService:
 
         return GenerateResponse(response=response)
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
     async def _ensure_deployment_access(
         self, deployment_id: UUID, user_id: UUID
     ) -> Deployment:
-        """Fetch a deployment and verify ownership."""
         deployment = await self._deployments.get_deployment(deployment_id)
         if deployment is None:
             raise DeploymentNotFoundError(deployment_id)
@@ -345,7 +276,6 @@ class DeploymentService:
         version_id: UUID,
         user_id: UUID,
     ) -> None:
-        """Ensure a model version exists and belongs to the user."""
         if version is None:
             raise DeploymentModelVersionNotFoundError(version_id)
         model = await self._models.get_model(version.model_id)
@@ -355,7 +285,6 @@ class DeploymentService:
     def _resolve_artifact_path(
         self, version, job: TrainingJob | None
     ) -> str:
-        """Return the on-disk adapter path for a model version."""
         if job is not None and job.artifact_path:
             return job.artifact_path
         return version.artifact_path

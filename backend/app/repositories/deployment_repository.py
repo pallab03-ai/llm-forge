@@ -1,8 +1,4 @@
-"""Deployment repository.
-
-Encapsulates all database access for `Deployment`.
-Business logic lives in the service layer, not here.
-"""
+"""Deployment repository."""
 
 from __future__ import annotations
 
@@ -16,17 +12,13 @@ from app.repositories.base import BaseRepository
 
 
 class DeploymentRepository(BaseRepository[Deployment]):
-    """Async repository for `Deployment`."""
-
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session=session, model=Deployment)
 
     async def create_deployment(self, deployment: Deployment) -> Deployment:
-        """Persist a new deployment. Caller commits."""
         return await self.add(deployment)
 
     async def get_deployment(self, deployment_id: UUID) -> Deployment | None:
-        """Fetch a single deployment by UUID."""
         return await self.get_by_id(deployment_id)
 
     async def list_deployments(
@@ -36,7 +28,6 @@ class DeploymentRepository(BaseRepository[Deployment]):
         limit: int = 100,
         offset: int = 0,
     ) -> list[Deployment]:
-        """Return deployments for an owner, newest first."""
         stmt = (
             select(Deployment)
             .where(Deployment.owner_id == owner_id)
@@ -48,7 +39,6 @@ class DeploymentRepository(BaseRepository[Deployment]):
         return list(result.scalars().all())
 
     async def count_deployments(self, owner_id: UUID) -> int:
-        """Total deployments for an owner (pagination total)."""
         stmt = select(func.count(Deployment.id)).where(
             Deployment.owner_id == owner_id
         )
@@ -60,7 +50,6 @@ class DeploymentRepository(BaseRepository[Deployment]):
         deployment: Deployment,
         status: DeploymentStatus,
     ) -> Deployment:
-        """Set a deployment's status and flush. Caller commits."""
         deployment.status = status
         await self._session.flush()
         await self._session.refresh(deployment)
@@ -72,7 +61,6 @@ class DeploymentRepository(BaseRepository[Deployment]):
         owner_id: UUID | None = None,
         model_version_id: UUID | None = None,
     ) -> Deployment | None:
-        """Return an ACTIVE deployment matching the filters, if any."""
         stmt = select(Deployment).where(
             Deployment.status == DeploymentStatus.ACTIVE
         )

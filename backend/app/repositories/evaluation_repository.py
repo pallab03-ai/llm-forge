@@ -1,8 +1,4 @@
-"""Evaluation repository.
-
-Encapsulates all database access for the `Evaluation` entity.
-Business logic lives in the service layer, not here.
-"""
+"""Evaluation repository."""
 
 from __future__ import annotations
 
@@ -17,17 +13,13 @@ from app.repositories.base import BaseRepository
 
 
 class EvaluationRepository(BaseRepository[Evaluation]):
-    """Async repository for `Evaluation`."""
-
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session=session, model=Evaluation)
 
     async def create(self, evaluation: Evaluation) -> Evaluation:
-        """Persist a new evaluation. Caller commits."""
         return await self.add(evaluation)
 
     async def get_by_id(self, evaluation_id: UUID) -> Evaluation | None:
-        """Fetch a single evaluation by UUID."""
         result = await self._session.execute(
             select(Evaluation).where(Evaluation.id == evaluation_id)
         )
@@ -40,7 +32,6 @@ class EvaluationRepository(BaseRepository[Evaluation]):
         limit: int = 100,
         offset: int = 0,
     ) -> list[Evaluation]:
-        """Return evaluations for a user, newest first."""
         stmt = (
             select(Evaluation)
             .where(Evaluation.user_id == user_id)
@@ -52,7 +43,6 @@ class EvaluationRepository(BaseRepository[Evaluation]):
         return list(result.scalars().all())
 
     async def count_for_user(self, user_id: UUID) -> int:
-        """Total evaluations for a user (pagination total)."""
         stmt = select(func.count(Evaluation.id)).where(
             Evaluation.user_id == user_id
         )
@@ -67,7 +57,6 @@ class EvaluationRepository(BaseRepository[Evaluation]):
         started_at: datetime | None = None,
         completed_at: datetime | None = None,
     ) -> Evaluation | None:
-        """Update status and optionally timestamps."""
         ev = await self.get_by_id(evaluation_id)
         if ev is None:
             return None
@@ -90,7 +79,6 @@ class EvaluationRepository(BaseRepository[Evaluation]):
         bertscore_f1: float | None,
         semantic_similarity: float | None,
     ) -> Evaluation | None:
-        """Persist computed metrics onto an evaluation row."""
         ev = await self.get_by_id(evaluation_id)
         if ev is None:
             return None
@@ -106,7 +94,6 @@ class EvaluationRepository(BaseRepository[Evaluation]):
     async def save_error(
         self, evaluation_id: UUID, error_message: str
     ) -> Evaluation | None:
-        """Mark an evaluation as failed with an error message."""
         ev = await self.get_by_id(evaluation_id)
         if ev is None:
             return None

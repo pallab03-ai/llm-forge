@@ -708,7 +708,9 @@ async def test_cancel_failed_job_not_cancellable(
 
     # Mark as FAILED
     repo = TrainingJobRepository(db_session)
-    await repo.update_error(uuid.UUID(job["id"]), "Something went wrong")
+    await repo.update_status(
+        uuid.UUID(job["id"]), TrainingJobStatus.FAILED
+    )
     await repo.commit()
 
     resp = await client.post(
@@ -1496,41 +1498,6 @@ async def test_repository_update_status(
 
 
 @pytest.mark.asyncio
-async def test_repository_update_artifact_path(
-    client: AsyncClient, auth_headers: dict, override_queue: MagicMock, db_session
-):
-    from app.repositories.training_job_repository import TrainingJobRepository
-
-    job = await _create_training_job(client, auth_headers)
-    repo = TrainingJobRepository(db_session)
-
-    updated = await repo.update_artifact_path(
-        uuid.UUID(job["id"]), "/artifacts/test/model.json"
-    )
-    await repo.commit()
-    assert updated is not None
-    assert updated.artifact_path == "/artifacts/test/model.json"
-
-
-@pytest.mark.asyncio
-async def test_repository_update_error(
-    client: AsyncClient, auth_headers: dict, override_queue: MagicMock, db_session
-):
-    from app.models.training_job import TrainingJobStatus
-    from app.repositories.training_job_repository import TrainingJobRepository
-
-    job = await _create_training_job(client, auth_headers)
-    repo = TrainingJobRepository(db_session)
-
-    updated = await repo.update_error(uuid.UUID(job["id"]), "OOM error")
-    await repo.commit()
-    assert updated is not None
-    assert updated.status == TrainingJobStatus.FAILED
-    assert updated.error_message == "OOM error"
-    assert updated.completed_at is not None
-
-
-@pytest.mark.asyncio
 async def test_repository_count_active_jobs(
     client: AsyncClient, auth_headers: dict, override_queue: MagicMock, db_session
 ):
@@ -1578,22 +1545,4 @@ async def test_repository_update_status_not_found(db_session):
 
     repo = TrainingJobRepository(db_session)
     result = await repo.update_status(uuid.uuid4(), TrainingJobStatus.RUNNING)
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_repository_update_artifact_path_not_found(db_session):
-    from app.repositories.training_job_repository import TrainingJobRepository
-
-    repo = TrainingJobRepository(db_session)
-    result = await repo.update_artifact_path(uuid.uuid4(), "/fake/path")
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_repository_update_error_not_found(db_session):
-    from app.repositories.training_job_repository import TrainingJobRepository
-
-    repo = TrainingJobRepository(db_session)
-    result = await repo.update_error(uuid.uuid4(), "error")
     assert result is None

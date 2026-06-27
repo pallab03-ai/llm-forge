@@ -1,14 +1,4 @@
-"""Authentication service.
-
-Encapsulates all business logic for registration, login, and current-user
-lookup. API routes MUST delegate to this service rather than touching the
-repository or session directly.
-
-Per engineering guardrails:
-- Business logic MUST NOT live in API routes.
-- Passwords are hashed with bcrypt before persistence.
-- JWT tokens expire after 24 hours.
-"""
+"""Authentication service: registration, login, current-user lookup."""
 
 from __future__ import annotations
 
@@ -30,14 +20,7 @@ from app.repositories.user_repository import UserRepository
 from app.schemas.auth import RegisterRequest
 
 
-# ---------------------------------------------------------------------------
-# Domain exceptions
-# ---------------------------------------------------------------------------
-
-
 class AuthError(Exception):
-    """Base class for authentication-related errors."""
-
     http_status: int = 400
     code: str = "auth_error"
 
@@ -56,25 +39,13 @@ class InvalidCredentialsError(AuthError):
     code = "invalid_credentials"
 
 
-class InactiveUserError(AuthError):
-    http_status = 403
-    code = "inactive_user"
-
-
 class InvalidTokenError(AuthError):
     http_status = 401
     code = "invalid_token"
 
 
-# ---------------------------------------------------------------------------
-# Service
-# ---------------------------------------------------------------------------
-
-
 @dataclass(slots=True)
 class TokenBundle:
-    """Result of a successful authentication operation."""
-
     access_token: str
     token_type: str
     expires_in: int
@@ -82,26 +53,11 @@ class TokenBundle:
 
 
 class AuthService:
-    """Async authentication service.
-
-    A new instance is created per request via the `get_auth_service`
-    dependency, sharing the request-scoped `AsyncSession`.
-    """
-
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._users = UserRepository(session)
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     async def register(self, payload: RegisterRequest) -> TokenBundle:
-        """Register a new user and return an access token.
-
-        Raises:
-            UserAlreadyExistsError: if email or username is already taken.
-        """
         normalized_email = payload.email.lower()
         normalized_username = payload.username.lower()
 
@@ -122,25 +78,14 @@ class AuthService:
         return self._build_token_bundle(user)
 
     async def login(self, email: str, password: str) -> TokenBundle:
-        """Authenticate a user by email + password.
-
-        Raises:
-            InvalidCredentialsError: if the credentials are wrong.
-        """
         user = await self._users.get_by_email(email)
         if user is None or not verify_password(password, user.password_hash):
-            # Use the same error for both cases to avoid user enumeration.
+            # Same error either way — avoids user enumeration.
             raise InvalidCredentialsError("Invalid email or password")
 
         return self._build_token_bundle(user)
 
     async def get_user_by_token(self, token: str) -> User:
-        """Resolve a JWT access token to the corresponding `User`.
-
-        Raises:
-            InvalidTokenError: if the token is invalid or the user no
-                longer exists.
-        """
         try:
             payload = decode_access_token(token)
         except TokenError as exc:
@@ -160,10 +105,6 @@ class AuthService:
             raise InvalidTokenError("User no longer exists")
 
         return user
-
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
 
     def _build_token_bundle(self, user: User) -> TokenBundle:
         token = create_access_token(user.id, role=user.role.value)

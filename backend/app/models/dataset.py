@@ -1,15 +1,8 @@
 """Dataset and DatasetVersion ORM models.
 
-Represents uploaded datasets and their versioned snapshots.
-Each dataset can have multiple versions; each version points to a file
-stored on the local filesystem (LocalStorageService).
-
-Per engineering guardrails:
-- UUID primary keys.
-- created_at / updated_at timestamps.
-- Soft delete via deleted_at.
-- version_number is an integer (1, 2, 3, ...).
-- DatasetVersion.created_at serves as the upload timestamp.
+Each dataset can have multiple versioned snapshots. ``deleted_at`` is
+the soft-delete marker; NULL means active. ``DatasetVersion.created_at``
+serves as the upload timestamp.
 """
 
 from __future__ import annotations
@@ -31,30 +24,19 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import BaseModel
 
 
-# ---------------------------------------------------------------------------
-# Enums
-# ---------------------------------------------------------------------------
-
-
 class DatasetFormat(str, enum.Enum):
-    """Supported file formats for datasets."""
-
     CSV = "csv"
     JSON = "json"
     JSONL = "jsonl"
 
 
 class DatasetType(str, enum.Enum):
-    """Semantic type of a dataset."""
-
     INSTRUCTION_TUNING = "instruction_tuning"
     CHAT = "chat"
     QA = "qa"
 
 
 class DatasetStatus(str, enum.Enum):
-    """Lifecycle status of a dataset."""
-
     UPLOADING = "uploading"
     VALIDATING = "validating"
     READY = "ready"
@@ -62,16 +44,8 @@ class DatasetStatus(str, enum.Enum):
     DELETED = "deleted"
 
 
-# ---------------------------------------------------------------------------
-# Dataset
-# ---------------------------------------------------------------------------
-
-
 class Dataset(BaseModel):
-    """A logical dataset that can have multiple versions.
-
-    Table: `datasets`
-    """
+    """Table: `datasets`."""
 
     __tablename__ = "datasets"
 
@@ -134,7 +108,6 @@ class Dataset(BaseModel):
         doc="Soft-delete timestamp. NULL means active.",
     )
 
-    # Relationships
     versions: Mapped[list["DatasetVersion"]] = relationship(
         "DatasetVersion",
         back_populates="dataset",
@@ -142,7 +115,7 @@ class Dataset(BaseModel):
         lazy="selectin",
     )
 
-    def __repr__(self) -> str:  # pragma: no cover - debug helper
+    def __repr__(self) -> str:  # pragma: no cover
         return (
             f"<Dataset id={self.id} name={self.name!r} "
             f"type={self.dataset_type!r} status={self.status!r}>"
@@ -153,20 +126,8 @@ class Dataset(BaseModel):
         return self.deleted_at is not None
 
 
-# ---------------------------------------------------------------------------
-# DatasetVersion
-# ---------------------------------------------------------------------------
-
-
 class DatasetVersion(BaseModel):
-    """A specific version of a dataset.
-
-    Table: `dataset_versions`
-
-    Each version corresponds to one uploaded file. The file is stored on
-    the local filesystem via LocalStorageService. created_at serves as
-    the upload timestamp.
-    """
+    """Table: `dataset_versions`."""
 
     __tablename__ = "dataset_versions"
 
@@ -222,13 +183,12 @@ class DatasetVersion(BaseModel):
         doc="JSON-encoded statistics blob (avg lengths, etc.).",
     )
 
-    # Relationships
     dataset: Mapped["Dataset"] = relationship(
         "Dataset",
         back_populates="versions",
     )
 
-    def __repr__(self) -> str:  # pragma: no cover - debug helper
+    def __repr__(self) -> str:  # pragma: no cover
         return (
             f"<DatasetVersion id={self.id} dataset={self.dataset_id} "
             f"v{self.version_number} records={self.record_count}>"

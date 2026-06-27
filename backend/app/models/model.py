@@ -1,15 +1,9 @@
 """Model Registry ORM models.
 
-Represents logical models and their versioned LoRA adapter artifacts.
-A Model is a user-owned container (e.g. "Customer Support Assistant").
-A ModelVersion is one trained adapter + evaluation snapshot (v1, v2, ...).
-
-Per engineering guardrails:
-- UUID primary keys.
-- created_at / updated_at timestamps.
-- Model has no soft delete — use ARCHIVED version status instead.
-- Version status lifecycle: DRAFT → STAGING → PRODUCTION → ARCHIVED.
-- Only one version per model may be PRODUCTION at a time.
+A ``Model`` is a user-owned container; a ``ModelVersion`` is one
+trained LoRA adapter (with an evaluation snapshot). Models have no
+soft delete — use the version's ARCHIVED status instead. Only one
+version per model may be PRODUCTION at a time.
 """
 
 from __future__ import annotations
@@ -30,30 +24,15 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import BaseModel
 
 
-# ---------------------------------------------------------------------------
-# Enums
-# ---------------------------------------------------------------------------
-
-
 class ModelVersionStatus(str, enum.Enum):
-    """Lifecycle status of a model version."""
-
     DRAFT = "draft"
     STAGING = "staging"
     PRODUCTION = "production"
     ARCHIVED = "archived"
 
 
-# ---------------------------------------------------------------------------
-# Model
-# ---------------------------------------------------------------------------
-
-
 class Model(BaseModel):
-    """A logical model container owned by a user.
-
-    Table: `models`
-    """
+    """Table: `models`."""
 
     __tablename__ = "models"
 
@@ -77,7 +56,6 @@ class Model(BaseModel):
         doc="Optional description of the model.",
     )
 
-    # Relationships
     versions: Mapped[list["ModelVersion"]] = relationship(
         "ModelVersion",
         back_populates="model",
@@ -86,27 +64,15 @@ class Model(BaseModel):
         cascade="all, delete-orphan",
     )
 
-    def __repr__(self) -> str:  # pragma: no cover - debug helper
+    def __repr__(self) -> str:  # pragma: no cover
         return (
             f"<Model id={self.id} name={self.name!r} "
             f"owner={self.owner_id}>"
         )
 
 
-# ---------------------------------------------------------------------------
-# ModelVersion
-# ---------------------------------------------------------------------------
-
-
 class ModelVersion(BaseModel):
-    """A specific trained adapter version of a model.
-
-    Table: `model_versions`
-
-    Each version is created from one TrainingJob and optionally one
-    Evaluation. The artifact_path points to the trained LoRA adapter.
-    metrics_snapshot stores the evaluation metrics at promotion time.
-    """
+    """Table: `model_versions`."""
 
     __tablename__ = "model_versions"
 
@@ -162,13 +128,12 @@ class ModelVersion(BaseModel):
         doc="Current lifecycle status.",
     )
 
-    # Relationships
     model: Mapped["Model"] = relationship(
         "Model",
         back_populates="versions",
     )
 
-    def __repr__(self) -> str:  # pragma: no cover - debug helper
+    def __repr__(self) -> str:  # pragma: no cover
         return (
             f"<ModelVersion id={self.id} model={self.model_id} "
             f"v{self.version_number} status={self.status!r}>"

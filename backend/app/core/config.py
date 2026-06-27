@@ -1,8 +1,4 @@
-"""Application configuration using Pydantic Settings.
-
-Loads configuration from environment variables and .env file.
-Follows the explicit configuration principle from engineering guardrails.
-"""
+"""Application configuration loaded from environment variables and .env."""
 
 from functools import lru_cache
 from typing import List
@@ -10,14 +6,11 @@ from typing import List
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Environments that require a real, non-default JWT secret.
-# In these environments, the application MUST refuse to boot if the
-# development-only default secret is still in use.
+# Production-like environments require a non-default JWT secret.
 _PRODUCTION_ENVIRONMENTS: frozenset[str] = frozenset({"production", "staging"})
 
-# The development-only default secret. Any value that starts with this
-# prefix is treated as a placeholder and rejected in production-like
-# environments.
+# Development-only default secret prefix; values starting with this
+# are rejected when APP_ENV is production-like.
 _DEV_JWT_SECRET_PREFIX: str = "change-me-in-production"
 
 
@@ -61,7 +54,7 @@ class Settings(BaseSettings):
     REDIS_PORT: int = Field(default=6379)
     REDIS_DB: int = Field(default=0)
 
-    # MinIO
+    # MinIO (legacy; not used by LocalStorageService)
     MINIO_ENDPOINT: str = Field(default="minio:9000")
     MINIO_ACCESS_KEY: str = Field(default="minioadmin")
     MINIO_SECRET_KEY: str = Field(default="minioadmin")
@@ -69,20 +62,15 @@ class Settings(BaseSettings):
     MINIO_BUCKET_DATASETS: str = Field(default="datasets")
     MINIO_BUCKET_ARTIFACTS: str = Field(default="artifacts")
 
-    # Local storage (Phase 2 - Dataset Service)
-    # Replaces MinIO for dataset file storage in this phase.
-    # Files are stored under this directory, organized by dataset id /
-    # version id. The directory is created on demand by the storage
-    # service.
+    # Local storage. Files live under this root, organized by
+    # dataset/version. The directory is created on demand.
     LOCAL_STORAGE_PATH: str = Field(default="./local_storage")
 
-    # Dataset upload limits (Phase 2)
-    # Phase 2.1: tightened default to 50 MB to prevent OOM on large
-    # uploads. Configurable via env (DATASET_MAX_FILE_SIZE_BYTES).
+    # Dataset upload limits
     DATASET_MAX_FILE_SIZE_BYTES: int = Field(default=50 * 1024 * 1024)  # 50 MB
     DATASET_MAX_RECORDS: int = Field(default=10_000_000)  # 10M records
 
-    # MLflow
+    # MLflow (legacy)
     MLFLOW_TRACKING_URI: str = Field(default="http://mlflow:5000")
     MLFLOW_ARTIFACT_ROOT: str = Field(default="s3://artifacts/mlflow")
     MLFLOW_S3_ENDPOINT_URL: str = Field(default="http://minio:9000")
@@ -91,7 +79,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = Field(default="INFO")
     LOG_FORMAT: str = Field(default="json")
 
-    # JWT / Authentication (Phase 1)
+    # JWT
     JWT_SECRET_KEY: str = Field(
         default="change-me-in-production-this-is-a-development-only-secret-key"
     )
@@ -100,33 +88,17 @@ class Settings(BaseSettings):
     JWT_ISSUER: str = Field(default="llm-forge")
     JWT_AUDIENCE: str = Field(default="llm-forge-api")
 
-    # Password policy (Phase 1)
+    # Password policy
     PASSWORD_MIN_LENGTH: int = Field(default=8)
     PASSWORD_MAX_LENGTH: int = Field(default=128)
 
-    # Bcrypt rounds (Phase 1)
     BCRYPT_ROUNDS: int = Field(default=12)
 
     @model_validator(mode="after")
     def _validate_production_secrets(self) -> "Settings":
-        """Refuse to boot in production-like environments with a dev secret.
-
-        The ``JWT_SECRET_KEY`` field has a development-only default so that
-        local development and the test suite work out of the box. That
-        default is a known public string and MUST NOT be used to sign real
-        tokens. If the application is started with ``APP_ENV`` set to
-        ``production`` or ``staging`` while the default secret is still in
-        place, we raise ``ValueError`` so the process exits immediately
-        rather than silently issuing tokens signed with a public secret.
-
-        Returns:
-            The validated ``Settings`` instance.
-
-        Raises:
-            ValueError: If a production-like environment is detected and
-                ``JWT_SECRET_KEY`` still starts with the development-only
-                prefix.
-        """
+        # Refuse to boot in production-like environments with the dev
+        # default secret in place — that string is a known public value
+        # and must never be used to sign real tokens.
         env = self.APP_ENV.strip().lower()
         if env in _PRODUCTION_ENVIRONMENTS:
             if self.JWT_SECRET_KEY.startswith(_DEV_JWT_SECRET_PREFIX):
@@ -142,7 +114,6 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
-        """Construct PostgreSQL async URL."""
         return (
             f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
             f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
@@ -150,7 +121,6 @@ class Settings(BaseSettings):
 
     @property
     def database_url_sync(self) -> str:
-        """Construct PostgreSQL sync URL for Alembic."""
         return (
             f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
             f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
@@ -158,13 +128,11 @@ class Settings(BaseSettings):
 
     @property
     def redis_url(self) -> str:
-        """Construct Redis URL."""
         return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
 
 
 @lru_cache
 def get_settings() -> Settings:
-    """Return cached settings instance."""
     return Settings()
 
 

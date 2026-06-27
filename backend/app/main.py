@@ -1,14 +1,7 @@
 """FastAPI application entry point.
 
-Phase 0 — Foundation only. Wires up:
-- Structured logging
-- CORS middleware
-- API v1 router (health endpoint)
-- OpenAPI documentation
-
-Phase 1 — Adds:
-- Custom exception handlers that emit the standard
-  `{success, error}` envelope at the top level (not wrapped in `detail`).
+Wires up the API v1 router, CORS, structured logging, and a uniform
+``{success, error}`` envelope for every domain exception.
 """
 
 from contextlib import asynccontextmanager
@@ -87,7 +80,6 @@ async def lifespan(app: FastAPI):
 
 
 def _envelope_error(*, code: str, message: str, http_status: int) -> JSONResponse:
-    """Build a top-level `{success, error}` JSON response."""
     return JSONResponse(
         status_code=http_status,
         content={
@@ -109,7 +101,7 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json",
     )
 
-    # CORS middleware
+    # CORS
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
@@ -117,10 +109,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    # ------------------------------------------------------------------
-    # Exception handlers — emit the standard envelope at the top level.
-    # ------------------------------------------------------------------
 
     @app.exception_handler(AuthError)
     async def _auth_error_handler(_: Request, exc: AuthError) -> JSONResponse:
@@ -146,11 +134,8 @@ def create_app() -> FastAPI:
     async def _validation_error_handler(
         _: Request, exc: RequestValidationError
     ) -> JSONResponse:
-        # Keep FastAPI's default 422 status but expose the envelope shape
-        # so clients can rely on a single error contract.
-        # Sanitize errors: Pydantic's ctx may contain non-JSON-serializable
-        # objects (e.g. ValueError instances from model_validator).  We
-        # convert them to strings so the response can always be serialized.
+        # Sanitize Pydantic ctx: it can contain non-JSON-serializable
+        # objects (e.g. ValueError instances from model_validator).
         safe_errors = []
         for err in exc.errors():
             safe_err = {**err}
@@ -178,8 +163,8 @@ def create_app() -> FastAPI:
     async def _dataset_access_denied_handler(
         _: Request, exc: DatasetAccessDeniedError
     ) -> JSONResponse:
-        # Phase 2.1: 403 for cross-tenant access. We do NOT leak whether
-        # the dataset exists — the message is intentionally generic.
+        # 403 for cross-tenant access; message is generic so we don't
+        # leak whether the dataset exists.
         return _envelope_error(
             code="DATASET_ACCESS_DENIED",
             message="You do not have access to this dataset.",
@@ -235,8 +220,6 @@ def create_app() -> FastAPI:
             message=str(exc),
             http_status=status.HTTP_400_BAD_REQUEST,
         )
-
-    # -- Training job exception handlers (Phase 3) --
 
     @app.exception_handler(TrainingJobNotFoundError)
     async def _training_job_not_found_handler(
@@ -297,8 +280,6 @@ def create_app() -> FastAPI:
             message=str(exc),
             http_status=status.HTTP_400_BAD_REQUEST,
         )
-
-    # -- Evaluation exception handlers (Phase 5) --
 
     @app.exception_handler(EvaluationNotFoundError)
     async def _evaluation_not_found_handler(
@@ -389,8 +370,6 @@ def create_app() -> FastAPI:
             message=str(exc),
             http_status=exc.http_status,
         )
-
-    # -- Model Registry exception handlers (Phase 6) --
 
     @app.exception_handler(RegistryModelNotFoundError)
     async def _registry_model_not_found_handler(
@@ -512,8 +491,6 @@ def create_app() -> FastAPI:
             http_status=exc.http_status,
         )
 
-    # -- Deployment exception handlers (Phase 7) --
-
     @app.exception_handler(DeploymentNotFoundError)
     async def _deployment_not_found_handler(
         _: Request, exc: DeploymentNotFoundError
@@ -618,14 +595,9 @@ def create_app() -> FastAPI:
     async def _http_exception_handler(
         _: Request, exc: StarletteHTTPException
     ) -> JSONResponse:
-        """Wrap any HTTPException in the standard `{success, error}` envelope.
-
-        Phase 2.1: this lets route-level ``HTTPException`` raises (e.g.
-        the upload size guard) participate in the same error contract
-        as the rest of the API. If ``exc.detail`` is already a dict
-        with ``code``/``message`` keys, we forward them verbatim;
-        otherwise we synthesize a generic envelope.
-        """
+        # Route-level HTTPException raises (e.g. the upload size guard)
+        # participate in the same envelope. If detail is already a dict
+        # with code/message keys, forward it verbatim.
         detail = exc.detail
         if isinstance(detail, dict) and "code" in detail and "message" in detail:
             return _envelope_error(
@@ -639,7 +611,6 @@ def create_app() -> FastAPI:
             http_status=exc.status_code,
         )
 
-    # Mount API v1
     app.include_router(api_router, prefix=settings.API_V1_PREFIX)
 
     return app

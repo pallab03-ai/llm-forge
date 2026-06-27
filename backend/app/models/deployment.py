@@ -1,14 +1,7 @@
 """Deployment ORM model.
 
-Represents the exposure of one ModelVersion as an inference endpoint.
-Deployments have a simple four-state lifecycle:
-  PENDING → DEPLOYING → ACTIVE
-              ↘ FAILED
-
-Per engineering guardrails:
-- UUID primary keys.
-- created_at / updated_at timestamps.
-- No soft delete.
+Exposes one ModelVersion as an inference endpoint.
+Lifecycle: PENDING → DEPLOYING → ACTIVE, or → FAILED.
 """
 
 from __future__ import annotations
@@ -22,30 +15,15 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import BaseModel
 
 
-# ---------------------------------------------------------------------------
-# Enums
-# ---------------------------------------------------------------------------
-
-
 class DeploymentStatus(str, enum.Enum):
-    """Lifecycle status of a deployment."""
-
     PENDING = "pending"
     DEPLOYING = "deploying"
     ACTIVE = "active"
     FAILED = "failed"
 
 
-# ---------------------------------------------------------------------------
-# Deployment
-# ---------------------------------------------------------------------------
-
-
 class Deployment(BaseModel):
-    """A deployed ModelVersion exposed as an inference endpoint.
-
-    Table: `deployments`
-    """
+    """Table: `deployments`."""
 
     __tablename__ = "deployments"
 
@@ -90,7 +68,7 @@ class Deployment(BaseModel):
         doc="Public endpoint identifier/name.",
     )
 
-    def __repr__(self) -> str:  # pragma: no cover - debug helper
+    def __repr__(self) -> str:  # pragma: no cover
         return (
             f"<Deployment id={self.id} name={self.deployment_name!r} "
             f"status={self.status!r}>"
